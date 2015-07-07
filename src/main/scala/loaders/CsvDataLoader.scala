@@ -25,8 +25,8 @@ object CsvDataLoader {
    * @param minPartitions The minimum # of partitions to use
    * @return RDD of DenseVectors, one per CSV row
    */
-  def apply(sc: SparkContext, path: String, minPartitions: Int): RDD[DenseVector[Double]] = {
-    sc.textFile(path, minPartitions).map(row => DenseVector(row.split(",").map(_.toDouble)))
+  def apply(sc: SparkContext, path: String, minPartitions: Int, delim: String = ","): RDD[DenseVector[Double]] = {
+    sc.textFile(path, minPartitions).map(row => DenseVector(row.split(delim).map(_.toDouble)))
   }
 }
 
@@ -37,7 +37,7 @@ object CsvFileDataLoader {
    * @param path the path to the CSV files
    * @return RDD of DenseVectors, one per CSV row
    */
-  def apply(sc: SparkContext, path: String): RDD[DenseVector[Double]] = {
-    sc.textFile(path).map(row => DenseVector(row.split(",").tail.map(_.toDouble)))
+  def apply(sc: SparkContext, path: String, delim: String = ","): RDD[DenseVector[Double]] = {
+    sc.textFile(path).map(row => DenseVector(row.split(delim).tail.map(_.toDouble)))
   }
 }

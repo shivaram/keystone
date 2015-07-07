@@ -20,9 +20,9 @@ parallelExecution in Test := false
     "org.slf4j" % "slf4j-api" % "1.7.2",
     "org.slf4j" % "slf4j-log4j12" % "1.7.2",
     "org.scalatest" %% "scalatest" % "1.9.1" % "test",
-    "org.apache.spark" % "spark-core_2.10" % "1.3.1" excludeAll(excludeHadoop),
-    "org.apache.spark" % "spark-mllib_2.10" % "1.3.1" excludeAll(excludeHadoop),
-    "org.apache.spark" % "spark-sql_2.10" % "1.3.1" excludeAll(excludeHadoop),
+    "org.apache.spark" % "spark-core_2.10" % "1.4.0" excludeAll(excludeHadoop),
+    "org.apache.spark" % "spark-mllib_2.10" % "1.4.0" excludeAll(excludeHadoop),
+    "org.apache.spark" % "spark-sql_2.10" % "1.4.0" excludeAll(excludeHadoop),
     "org.apache.commons" % "commons-compress" % "1.7",
     "commons-io" % "commons-io" % "2.4",
     "org.scalanlp" % "breeze_2.10" % "0.11.2",
@@ -59,6 +59,7 @@ mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>
     case "log4j.properties"                              => MergeStrategy.first
     case m if m.toLowerCase.endsWith("manifest.mf")      => MergeStrategy.discard
     case m if m.toLowerCase.matches("meta-inf.*\\.sf$")  => MergeStrategy.discard
+    case m if m.toLowerCase.startsWith("meta-inf/services/") => MergeStrategy.filterDistinctLines
     case _ => MergeStrategy.first
   }
 }

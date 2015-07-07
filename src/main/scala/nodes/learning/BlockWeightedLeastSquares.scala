@@ -3,6 +3,7 @@ package nodes.learning
 import nodes.util.VectorSplitter
 
 import scala.collection.mutable.ArrayBuffer
+import org.apache.spark.HashPartitioner
 
 import breeze.linalg._
 import breeze.numerics._
@@ -83,23 +84,40 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
       mixtureWeight: Double): BlockLinearMapper = {
     val sc = trainingFeatures.head.context
 
-    // Check if all examples in a partition are of the same class
-    val sameClasses = trainingLabels.mapPartitions { iter =>
-      Iterator.single(iter.map(label => label.data.indexOf(label.max)).toSeq.distinct.length == 1)
-    }.collect()
-    require(sameClasses.forall(x => x), "partitions should contain elements of the same class")
+    val reshuffleData = {
+      // Check if all examples in a partition are of the same class
+      val sameClasses = trainingLabels.mapPartitions { iter =>
+        Iterator.single(iter.map(label => label.toArray.indexOf(label.max)).toSeq.distinct.length == 1)
+      }.collect()
+      if (sameClasses.forall(x => x)) {
+        val localClassIdxs = trainingLabels.mapPartitions { iter =>
+          Iterator.single(iter.map(label => label.toArray.indexOf(label.max)).toSeq.distinct.head)
+        }.collect()
+        localClassIdxs.distinct.size != localClassIdxs.size
+      } else {
+        true
+      }
+    }
 
-    val classIdxs = trainingLabels.mapPartitions { iter =>
+    val (features, labels) = if (reshuffleData) {
+      logWarning("Partitions do not contain elements of the same class. Re-shuffling")
+      groupByClasses(trainingFeatures, trainingLabels)
+    } else {
+      (trainingFeatures, trainingLabels)
+    }
+
+    val classIdxs = labels.mapPartitions { iter =>
       Iterator.single(iter.map(label => label.toArray.indexOf(label.max)).toSeq.distinct.head)
-    }.cache().setName("classIdx")
-    
+    }.cache().setName("classIdxs")
+
+
     val nTrain = trainingLabels.count
     val nClasses = trainingLabels.first.length
 
-    val trainingLabelsMat = trainingLabels.mapPartitions(part =>
+    val labelsMat = labels.mapPartitions(part =>
       Iterator.single(MatrixUtils.rowsToMatrix(part)))
 
-    val jointLabelMean = DenseVector(trainingLabelsMat.map { part =>
+    val jointLabelMean = DenseVector(labelsMat.map { part =>
       2*mixtureWeight + (2*(1.0-mixtureWeight) * part.rows/nTrain.toDouble) - 1
     }.collect():_*)
 
@@ -113,7 +131,7 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
     val numBlocks = models.length
 
     // Initialize residual to labels - jointLabelMean
-    var residual = trainingLabelsMat.map { mat =>
+    var residual = labelsMat.map { mat =>
       mat(*, ::) :- jointLabelMean
     }.cache().setName("residual")
 
@@ -132,11 +150,11 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
       while (blockIdx < numBlocks) {
         val block = randomBlocks(blockIdx)
         logInfo(s"Running pass $pass block $block")
-        val blockFeatures = trainingFeatures(block)
+        val blockFeatures = features(block)
 
         val blockFeaturesMat = blockFeatures.mapPartitions { part => 
           Iterator.single(MatrixUtils.rowsToMatrix(part))
-        }.cache().setName("blockFeaturesMat")
+        }//.cache().setName("blockFeaturesMat")
 
         val treeBranchingFactor = sc.getConf.getInt("spark.mlmatrix.treeBranchingFactor", 2).toInt
         val depth = math.ceil(math.log(blockFeaturesMat.partitions.size) / 
@@ -155,9 +173,13 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
           }.cache().setName("jointMeans")
           val blockJointMeans = MatrixUtils.rowsToMatrix(blockJointMeansRDD.collect())
 
-          val aTaResidual = MLMatrixUtils.treeReduce(blockFeaturesMat.zip(residual).map { part =>
+          // val aTaResidual = MLMatrixUtils.treeReduce(blockFeaturesMat.zip(residual).map { part =>
+          //   (part._1.t * part._1, part._1.t * part._2)
+          // }, addPairMatrices, depth=depth)
+
+          val aTaResidual = blockFeaturesMat.zip(residual).map { part =>
             (part._1.t * part._1, part._1.t * part._2)
-          }, addPairMatrices, depth=depth)
+          }.reduce(addPairMatrices)
 
           val blockPopCov = (aTaResidual._1 / nTrain.toDouble) - (blockPopMean * blockPopMean.t)
 
@@ -166,9 +188,13 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
 
           (blockPopCov, aTaResidual._2 / (nTrain.toDouble), blockJointMeansRDD, blockPopMean)
         } else {
-          val aTResidual = MLMatrixUtils.treeReduce(blockFeaturesMat.zip(residual).map { part =>
+          // val aTResidual = MLMatrixUtils.treeReduce(blockFeaturesMat.zip(residual).map { part =>
+          //   part._1.t * part._2
+          // }, (a: DenseMatrix[Double], b: DenseMatrix[Double]) => a += b, depth=depth)
+
+          val aTResidual = blockFeaturesMat.zip(residual).map { part =>
             part._1.t * part._2
-          }, (a: DenseMatrix[Double], b: DenseMatrix[Double]) => a += b, depth=depth)
+          }.reduce((a: DenseMatrix[Double], b: DenseMatrix[Double]) => a += b)
 
           val blockStat = blockStats(block).get 
           (blockStat.popCov, aTResidual / (nTrain.toDouble), blockStat.jointMeanRDD,
@@ -224,28 +250,32 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
 
         // So newXj is oldXj + localFullModel
         models(block) += localFullModel
-        val localFullModelBC = sc.broadcast(localFullModel)
+        
+        // Don't update residual if this is the last block & iter
+        if ( !(pass == numIter - 1 && blockIdx == numBlocks - 1) ) {
+          val localFullModelBC = sc.broadcast(localFullModel)
 
-        val newResidual = blockFeaturesMat.zip(residual).map { part =>
-          part._2 -= part._1 * localFullModelBC.value 
-          part._2
-        }.cache().setName("residual")
+          val newResidual = blockFeaturesMat.zip(residual).map { part =>
+            part._2 -= part._1 * localFullModelBC.value 
+            part._2
+          }.cache().setName("residual")
 
-        newResidual.count
-        residual.unpersist()
-        residual = newResidual
+          newResidual.count
+          residual.unpersist()
+          residual = newResidual
 
-        residualMean = residual.map { mat =>
-          mean(mat(::, *)).toDenseVector
-        }.reduce { (a: DenseVector[Double], b: DenseVector[Double]) =>
-          a += b
-        } /= nClasses.toDouble
+          residualMean = residual.map { mat =>
+            mean(mat(::, *)).toDenseVector
+          }.reduce { (a: DenseVector[Double], b: DenseVector[Double]) =>
+            a += b
+          } /= nClasses.toDouble
+          localFullModelBC.unpersist()
+        }
 
         popCovBC.unpersist()
         popMeanBC.unpersist()
         popXTRBC.unpersist()
         modelBC.unpersist()
-        localFullModelBC.unpersist()
 
         blockFeaturesMat.unpersist()
 
@@ -275,5 +305,45 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
     a._2 += b._2
     a
   }
+
+  def groupByClasses(
+      features: Seq[RDD[DenseVector[Double]]],
+      labels: RDD[DenseVector[Double]])
+    : (Seq[RDD[DenseVector[Double]]], RDD[DenseVector[Double]]) = {
+
+    val nClasses = labels.first.length.toInt
+
+    // NOTE(shivaram): We use two facts here
+    // a. That the hashCode of an integer is the value itself
+    // b. That the HashPartitioner in Spark works by computing (k mod nClasses)
+    // This ensures that we get a single class per partition.
+    val hp = new HashPartitioner(nClasses)
+    val n = labels.partitions.length.toLong
+
+    // Associate a unique id with each item
+    // as Spark does not gaurantee two groupBy's will come out in the same order.
+    val shuffledLabels = labels.mapPartitionsWithIndex { case (k, iter) =>
+      iter.zipWithIndex.map { case (item, i) =>
+        val classIdx = argmax(item)
+        (classIdx, (i * n + k, item))
+      }
+    }.partitionBy(hp).values.mapPartitions { part =>
+      part.toArray.sortBy(_._1).map(_._2).iterator
+    }
+
+    val shuffledFeatures = features.map { featureRDD =>
+      featureRDD.zip(labels).mapPartitionsWithIndex { case (k, iter) =>
+        iter.zipWithIndex.map { case (item, i) =>
+          val classIdx = argmax(item._2)
+          (classIdx, (i * n + k, item._1))
+        }
+      }.partitionBy(hp).values.mapPartitions { part =>
+        part.toArray.sortBy(_._1).map(_._2).iterator
+      }
+    }
+
+    (shuffledFeatures, shuffledLabels)
+  }
+
 
 }
