@@ -1,11 +1,70 @@
 package workflow
 
+import java.io.{ByteArrayOutputStream, ObjectOutputStream}
+
 import nodes.util.Cacher
 import org.apache.spark.rdd.RDD
 import pipelines.Logging
 
+import scala.annotation.tailrec
+import scala.collection.mutable
+
 
 object PipelineRuntimeEstimator {
+
+  //These functions are for topologically sorting a pipeline DAG to efficiently
+  //count the number of paths to a sink.
+  def tsort[A](edges: Traversable[(A, A)]): Iterable[A] = {
+    @tailrec
+    def tsort(toPreds: Map[A, Set[A]], done: Iterable[A]): Iterable[A] = {
+      val (noPreds, hasPreds) = toPreds.partition { _._2.isEmpty }
+      if (noPreds.isEmpty) {
+        if (hasPreds.isEmpty) done else sys.error(hasPreds.toString)
+      } else {
+        val found = noPreds.map { _._1 }
+        tsort(hasPreds.mapValues { _ -- found }, done ++ found)
+      }
+    }
+
+    val toPred = edges.foldLeft(Map[A, Set[A]]()) { (acc, e) =>
+      acc + (e._1 -> acc.getOrElse(e._1, Set())) + (e._2 -> (acc.getOrElse(e._2, Set()) + e._1))
+    }
+    tsort(toPred, Seq())
+  }
+
+  def countPaths[A](edges: Seq[(A,A)], t: A): Map[A,Int] = {
+    //Initialize a Map with every count == 1.
+    val counts = mutable.Map[A,Int]()
+
+    edges.foreach {
+      e => {
+        counts(e._1) = 0
+        counts(e._2) = 0
+      }
+    }
+
+    counts(t) = 1
+
+    for ((src,dst) <- edges) {
+      counts(src) += counts(dst)
+    }
+
+    counts.toMap
+  }
+
+  def countPaths(x: Pipeline[_,_]): Map[Int,Int] = {
+    val edges = x.dataDeps.zip(x.fitDeps).zipWithIndex.flatMap {
+      case ((a,b),i) => (a ++ b).map(n => (n,i))
+    }
+
+    val res = PipelineRuntimeEstimator.tsort(edges).toSeq
+    val sortedEdges = edges.sortBy(i => res.indexOf(i._1)).reverse
+
+    countPaths(sortedEdges, x.sink)
+  }
+
+
+
   def runtime(node: Int): Double = 2.0
 
   def getChildren(x: Pipeline[_,_], node: Int): Seq[Int] = {
@@ -36,16 +95,17 @@ object PipelineRuntimeEstimator {
     //  }
     //}).reduce(_ + _)
 
+    //Make sure all data dependencies are evaluated
+    val dataDeps = pipe.dataDeps(node)
+    val dataDepRDDs = dataDeps.map(p => pipe.rddDataEval(p, sample).cache())
+
+    //Force the data to be materialized.
+    dataDepRDDs.map(_.count)
+
     val est = pipe.nodes(node) match {
+
       case transformer: TransformerNode[_] => {
-        //Make sure all data dependencies are evaluated
-        val dataDeps = pipe.dataDeps(node)
-        val dataDepRDDs = dataDeps.map(p => pipe.rddDataEval(p, sample).cache())
-
-        //Force the data to be materialized.
-        dataDepRDDs.map(_.count)
-
-        //Now make sure we have all our data dependencies.
+        ////Now make sure we have all our fit dependencies.
         val fitDeps = pipe.fitDeps(node)
         val fitDepsTransformers = fitDeps.map(pipe.fitEstimator)
 
@@ -58,13 +118,72 @@ object PipelineRuntimeEstimator {
 
         //This is ripped from RDD.toDebugString()
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
+        res.unpersist()
 
         Profile(duration, 0L, memSize)
       }
-      case _ => throw new RuntimeException("Only transformers should be cached.")
+      case estimator: EstimatorNode => {
+        val start = System.nanoTime()
+        val res = estimator.fit(dataDepRDDs)
+        val duration = System.nanoTime() - start
+
+        //This is a hack - basically just serializes the fit estimator and counts the bytes.
+        val baos = new ByteArrayOutputStream()
+        val oos = new ObjectOutputStream(baos)
+        oos.writeObject(res)
+        oos.close()
+        val memSize = baos.size()
+
+        Profile(duration, 0L, memSize)
+      }
+      case datanode: DataNode => {
+        val res = datanode.rdd.cache()
+
+        val start = System.nanoTime()
+        res.count()
+        val duration = System.nanoTime() - start
+
+        val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
+        res.unpersist()
+
+        Profile(duration, 0L, memSize)
+      }
+      case _ => throw new RuntimeException("Only transformers and estimators should be cached.")
     }
     est
   }
+
+  def estimateCachedRunTime[A](x: ConcretePipeline[A,_], cached: Seq[Int], data: RDD[A]): Double = {
+    def cachedRuntime(
+        x: Pipeline[_,_],
+        ind: Int,
+        cached: Int => Double,
+        paths: Int => Int,
+        localWork: Int => Double): Double = {
+      if(ind == -1)
+        0.0
+      else {
+        val deps = x.dataDeps(ind) ++ x.fitDeps(ind)
+        (localWork(ind) + deps.map(i => cachedRuntime(x, i, cached, paths, localWork)).sum) /
+          math.pow(paths(ind), cached(ind))
+      }
+    }
+
+    //Gather runtime statistics.
+    val profiles = (0 until x.nodes.length).map(i => estimateNode(x, i, data))
+    x.nodes.zip(profiles).map(println)
+
+    val localWork = profiles.map(_.ns.toDouble).toArray
+
+    //Move the cached map from a list[nodeid] => map[nodeid,double]
+    val cachedMap = (0 until x.nodes.length).map(i => if (cached contains i) 1.0 else 0.0).toArray
+
+    //Given a pipeline, compute the number of paths from each node to sink.
+    val pathCounts = countPaths(x)
+
+    cachedRuntime(x, x.sink, cachedMap, pathCounts, localWork)
+  }
+
 }
 
 object PipelineOptimizer extends Logging {
@@ -128,8 +247,7 @@ object PipelineOptimizer extends Logging {
 
   def bruteForceOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = {
     val (cacheSpec, time) = caches(pipe.nodes.length)  //Todo - filter out cache specs involving an estimator.
-      .map(c => (c, PipelineRuntimeEstimator
-      .estimateRunTime(pipe, Some(c))))
+      .map(c => (c, PipelineRuntimeEstimator.estimateRunTime(pipe, Some(c)))) //Todo - filter out cache specs where mem usage is too high.
       .minBy(_._2)
 
     makeCachedPipeline(pipe, cacheSpec)

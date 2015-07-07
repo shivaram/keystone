@@ -73,7 +73,65 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
       data)
 
     log.info(s"Estimate: $est")
+
+    val ests = (0 until predictorPipeline.nodes.length).map(id => {
+      PipelineRuntimeEstimator.estimateNode(
+        predictorPipeline.asInstanceOf[ConcretePipeline[String,Int]],
+        id,
+        data
+      )
+    })
+
+    ests.map(println)
+    println(s"Total: ${ests.reduce(_ + _)}")
   }
 
+  test("Counting paths from a => b") {
+    val graph = Seq((1,2),(1,3),(2,4),(3,4))
 
+    val res = PipelineRuntimeEstimator.tsort(graph).toSeq
+    val sortedEdges = graph.sortBy(i => res.indexOf(i._1)).reverse
+
+    log.info(s"Sorted edges: ${sortedEdges}")
+
+    val counts = PipelineRuntimeEstimator.countPaths(sortedEdges, 4)
+
+    log.info(s"Counts: $counts")
+
+    assert(counts(4) == 1)
+    assert(counts(1) == 2)
+
+  }
+
+  test("Convert a DAG to set(edges) and do the counts.") {
+    sc = new SparkContext("local", "test")
+
+    val (predictorPipeline, data) = getPredictorPipeline(sc)
+
+    val fitPipeline = Optimizer.execute(predictorPipeline)
+
+    makePdf(fitPipeline, "fitPipe")
+
+    val counts = PipelineRuntimeEstimator.countPaths(fitPipeline)
+
+    log.info(s"Counts: $counts")
+  }
+
+  test("Estimate uncached cost of a DAG") {
+    sc = new SparkContext("local", "test")
+
+    val (pipe, data) = getPredictorPipeline(sc)
+    val fitPipe = Optimizer.execute(pipe)
+
+    val dataFull = loaders.NewsgroupsDataLoader(sc, "/Users/sparks/datasets/20news-bydate-train/")
+    val dataSample = dataFull.data.sample(true, 0.01, 42).cache()
+    logInfo(s"Data sample size: ${dataSample.count}")
+
+    val ests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Seq(), dataSample)
+    log.info(s"Est: ${ests}")
+
+    val cests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Seq(1,5,14,6,15,13), dataSample)
+    log.info(s"Est: ${cests}")
+
+  }
 }

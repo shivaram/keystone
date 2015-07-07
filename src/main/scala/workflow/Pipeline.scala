@@ -121,7 +121,7 @@ trait Pipeline[A, B] {
     } :+ s"$sink -> ${nodes.size}"
 
     val fitEdges: Seq[String] = fitDeps.zipWithIndex.flatMap {
-      case (deps, id) => deps.map(x => s"$x -> $id [dir=${"\"none\""} style=${"\"dashed\""}]")
+      case (deps, id) => deps.map(x => s"$x -> $id [style=${"\"dashed\""}]")
     }
 
     val ranks = fitDeps.zipWithIndex.flatMap {
