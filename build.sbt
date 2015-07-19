@@ -23,7 +23,8 @@ libraryDependencies ++= Seq(
   "org.scalanlp" % "breeze_2.10" % "0.11.2",
   "com.github.fommil.netlib" % "all" % "1.1.2" pomOnly(),
   "edu.berkeley.cs.amplab" % "mlmatrix" % "0.1" from "https://s3-us-west-1.amazonaws.com/amp-ml-matrix/2.10/mlmatrix_2.10-0.1.jar",
-  "com.github.scopt" %% "scopt" % "3.3.0"
+  "com.github.scopt" %% "scopt" % "3.3.0",
+  "io.argonaut" %% "argonaut" % "6.0.4" 
 )
 
 {

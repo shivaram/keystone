@@ -9,6 +9,9 @@ import pipelines.Logging
 import scala.annotation.tailrec
 import scala.collection.mutable
 
+import argonaut._
+import Argonaut._
+
 
 object PipelineRuntimeEstimator {
 
@@ -275,6 +278,18 @@ object PipelineOptimizer extends Logging {
   }
 }
 
+object GreedyOptimizer {
+  //def cacheMem()
+  //def runs
+
+  def greedyOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = {
+    //Step 1 - build profile of the uncached execution.
+    //pipe.nodes.map
+    pipe
+  }
+}
+
+
 case class Profile(ns: Long, bytes: Long, mem: Long) {
   def +(p: Profile) = Profile(this.ns + p.ns, this.bytes + p.bytes, this.mem + p.mem)
 }
@@ -282,3 +297,28 @@ case class Profile(ns: Long, bytes: Long, mem: Long) {
 trait HasProfile {
   def profile(size: Int): Profile
 }
+
+
+object DAGWriter {
+
+  case class DAG(vertices: Map[String,Profile], edges: List[(String,String)], sink: Int)
+  implicit def ProfileCodecJson = casecodec3(Profile.apply, Profile.unapply)("loc","bytes","mem")
+  implicit def DAGCodecJson = casecodec3(DAG.apply, DAG.unapply)("vertices","edges","sink")
+
+  def toDAG[A,B](pipe: Pipeline[A, B], prof: Map[Int, Profile]): DAG = {
+    val p = pipe.asInstanceOf[ConcretePipeline[A,B]]
+
+    //Produce a list of edges from the adjacency list.
+    val edges = p.dataDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2))) ++
+                p.fitDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2)))
+
+    val vertices = prof.map(s => (s._1.toString, s._2)).toMap
+
+    DAG(vertices, edges.map(s => (s._1.toString, s._2.toString)).toList, pipe.sink)
+  }
+
+  def toJson[A,B](pipe: Pipeline[A,B], prof: Map[Int, Profile]): String = {
+    toDAG(pipe, prof).asJson.spaces2
+  }
+}
+
