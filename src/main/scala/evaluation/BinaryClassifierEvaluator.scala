@@ -48,11 +48,11 @@ case class BinaryClassificationMetrics(tp: Double, fp: Double, tn: Double, fn: D
    */
   def summary(): String = {
     val fmt = "%2.3f"
-    s""" Accuracy:\t${fmt.format(accuracy)}
+    s"""|Accuracy:\t${fmt.format(accuracy)}
         |Precision:\t${fmt.format(precision)}
-        |Recall:\t${fmt.format(recall)}
-        |Specificity:\t${fmt.format(specificity)}}
-        |F1:\t${fmt.format(fScore())}
+        |Recall:\t\t${fmt.format(recall)}
+        |Specificity:\t${fmt.format(specificity)}
+        |F1:\t\t${fmt.format(fScore())}
      """.stripMargin
   }
 }
