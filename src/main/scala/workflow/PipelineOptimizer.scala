@@ -4,6 +4,7 @@ import java.io.{ByteArrayOutputStream, ObjectOutputStream}
 
 import nodes.util.Cacher
 import org.apache.spark.rdd.RDD
+import org.apache.spark.util.SparkUtilWrapper
 import pipelines.Logging
 
 import scala.annotation.tailrec
@@ -13,7 +14,7 @@ import argonaut._
 import Argonaut._
 
 
-object PipelineRuntimeEstimator {
+object PipelineRuntimeEstimator extends Logging {
 
   //These functions are for topologically sorting a pipeline DAG to efficiently
   //count the number of paths to a sink.
@@ -66,28 +67,11 @@ object PipelineRuntimeEstimator {
     countPaths(sortedEdges, x.sink)
   }
 
-
-
-  def runtime(node: Int): Double = 2.0
-
   def getChildren(x: Pipeline[_,_], node: Int): Seq[Int] = {
     x.dataDeps.zipWithIndex.filter { case (l,n) => l.contains(node)}.map(_._2) ++
       x.fitDeps.zipWithIndex.filter { case (l,n) => l.contains(node)}.map(_._2)
   }
 
-  def estimateRunTime(pipe: Pipeline[_,_], node: Int, runtime: Int => Double): Double = {
-    val parents = pipe.dataDeps(node) ++ pipe.fitDeps(node)
-    runtime(node) + parents.map(p => estimateRunTime(pipe, p, runtime)).reduce(_ + _)
-  }
-
-  def estimateRunTime(x: Pipeline[_,_], cached: Option[Seq[Int]]): Double = {
-    val runTimeEstimator = cached match {
-      case Some(cl) => { x: Int => (1.0 - cl(x))*2.0 }
-      case None => runtime _
-    }
-
-    estimateRunTime(x, x.sink, runTimeEstimator)
-  }
 
   def estimateNode[A](pipe: ConcretePipeline[A,_], node: Int, sample: RDD[A]): Profile = {
     //TODO: this code only served as an exercise to make sure i could do this stuff.
@@ -120,6 +104,7 @@ object PipelineRuntimeEstimator {
         val duration = System.nanoTime() - start
 
         //This is ripped from RDD.toDebugString()
+        logInfo(res.toDebugString)
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
         res.unpersist()
 
@@ -131,11 +116,7 @@ object PipelineRuntimeEstimator {
         val duration = System.nanoTime() - start
 
         //This is a hack - basically just serializes the fit estimator and counts the bytes.
-        val baos = new ByteArrayOutputStream()
-        val oos = new ObjectOutputStream(baos)
-        oos.writeObject(res)
-        oos.close()
-        val memSize = baos.size()
+        val memSize = SparkUtilWrapper.estimateSize(res)
 
         Profile(duration, 0L, memSize)
       }
@@ -145,6 +126,8 @@ object PipelineRuntimeEstimator {
         val start = System.nanoTime()
         res.count()
         val duration = System.nanoTime() - start
+
+        logInfo(res.toDebugString)
 
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
         res.unpersist()
@@ -156,35 +139,74 @@ object PipelineRuntimeEstimator {
     est
   }
 
-  def estimateCachedRunTime[A](x: ConcretePipeline[A,_], cached: Seq[Int], data: RDD[A]): Double = {
-    def cachedRuntime(
-        x: Pipeline[_,_],
-        ind: Int,
-        cached: Int => Double,
-        paths: Int => Int,
-        localWork: Int => Double): Double = {
-      if(ind == -1)
-        0.0
+  def cachedRuntime(
+      x: Pipeline[_,_],
+      ind: Int,
+      cached: Int => Double,
+      runs: Int => Int,
+      localWork: Int => Double): Double = {
+    if(ind == -1)
+      0.0
+    else {
+      val deps = x.dataDeps(ind) ++ x.fitDeps(ind)
+      (localWork(ind) + deps.map(i => cachedRuntime(x, i, cached, runs, localWork)).sum) /
+        math.pow(runs(ind), cached(ind))
+    }
+  }
+
+  def getSuccs(x: Pipeline[_,_]): Map[Int,Seq[Int]] = {
+    x.nodes.indices.map(i => (i, getChildren(x, i))).toMap
+  }
+
+  def getRuns(x: Pipeline[_,_], cache: Set[Int]): Map[Int,Int] = {
+    val succ = getSuccs(x)
+
+    def r(i: Int): Int = {
+      if (succ(i).isEmpty) {
+        1
+      }
       else {
-        val deps = x.dataDeps(ind) ++ x.fitDeps(ind)
-        (localWork(ind) + deps.map(i => cachedRuntime(x, i, cached, paths, localWork)).sum) /
-          math.pow(paths(ind), cached(ind))
+        succ(i).map(j => if(cache.contains(j)) 1 else r(j)).sum
       }
     }
 
-    //Gather runtime statistics.
-    val profiles = (0 until x.nodes.length).map(i => estimateNode(x, i, data))
-    x.nodes.zip(profiles).map(println)
+    x.nodes.indices.map(i => (i, r(i))).toMap
+  }
 
-    val localWork = profiles.map(_.ns.toDouble).toArray
+  def estimateCachedRunTime[A](x: ConcretePipeline[A,_], cached: Set[Int], data: RDD[A], profs: Option[Map[Int,Profile]] = None): Double = {
+
+    //Gather runtime statistics.
+    val profiles = profs match {
+      case Some(x) => x
+      case None => x.nodes.indices.map(i => (i,estimateNode(x, i, data))).toMap
+    }
+
+    x.nodes.indices.map(i => (x.nodes(i), profiles(i))).foreach(println)
+
+    val localWork = x.nodes.indices.map(i => profiles(i).ns.toDouble).toArray
 
     //Move the cached map from a list[nodeid] => map[nodeid,double]
-    val cachedMap = (0 until x.nodes.length).map(i => if (cached contains i) 1.0 else 0.0).toArray
+    val cachedMap = x.nodes.indices.map(i => if (cached contains i) 1.0 else 0.0).toArray
 
     //Given a pipeline, compute the number of paths from each node to sink.
-    val pathCounts = countPaths(x)
+    val runs = getRuns(x, cached)
 
-    cachedRuntime(x, x.sink, cachedMap, pathCounts, localWork)
+    cachedRuntime(x, x.sink, cachedMap, runs, localWork)
+  }
+
+  def estimateNodes[A](x: ConcretePipeline[A,_], data: RDD[A]): Map[Int,Profile] = {
+    //TODO: Make this a recursive thing that is smart about caching.
+    //Essentially estimateNode(pipe, id, profiles: Map[Id,Profile], intermediate_res: Map[Id,Result]
+    //Then we proceed recursively, iteratively building up what we need to.
+    //for p in parents
+    //if p not in intermediate_res
+    // (intermediate_res, profiles) = estimateNode(pipe, p, profiles, intermediate_res)
+    //Now that we have intermediate res, calculate current node given these.
+    //Need to look at executor to figure this out.
+
+    //Alternatively - topologically sort the dag and execute in order, then you won't have anything missing.
+
+    x.nodes.indices.map(i => (i, estimateNode(x, i, data))).toMap
   }
 
 }
@@ -208,55 +230,70 @@ object PipelineOptimizer extends Logging {
    * Given a pipeline and an index to cache - return a pipeline with the node cached.
    */
   def addCached[A,B](pipe: Pipeline[A,B], nodeToCache: Int): Pipeline[A, B] = {
-    val newNodes = pipe.nodes :+ new Cacher
-    var newId = pipe.nodes.length
+    pipe.nodes(nodeToCache) match {
+      case e: EstimatorNode => {
+        pipe
+      }
+      case _ => {
+        val newNodes = pipe.nodes :+ new Cacher
+        var newId = pipe.nodes.length
 
-    val nodeChildren = PipelineRuntimeEstimator.getChildren(pipe, nodeToCache)
+        val nodeChildren = PipelineRuntimeEstimator.getChildren(pipe, nodeToCache)
 
-    //Set up the data dependencies for the node to cache and the new node.
-    val newNodeDataDeps = if (pipe.dataDeps(nodeToCache).length > 0) Seq(nodeToCache) else Seq()
-    var newDataDeps = (pipe.dataDeps :+ newNodeDataDeps)
+        //The new node depends on only the node to cache.
+        var newDataDeps = pipe.dataDeps :+ Seq(nodeToCache)
+        var newFitDeps = pipe.fitDeps :+ Seq()
 
-    val newNodeFitDeps = if (pipe.fitDeps(nodeToCache).length > 0) Seq(nodeToCache) else Seq()
-    var newFitDeps = (pipe.fitDeps :+ newNodeFitDeps)
+        var dataDeps = pipe.dataDeps
+        var fitDeps = pipe.fitDeps
 
-    //For each of the nodes children, modify its parents to point to the new id.
-    for(p <- nodeChildren) {
-      newDataDeps = newDataDeps.updated(p, replaceParent(newDataDeps(p), nodeToCache, newId))
-      newFitDeps = newFitDeps.updated(p, replaceParent(newFitDeps(p), nodeToCache, newId))
+        //For each of the nodes children, modify its parents to point to the new id.
+        for(p <- nodeChildren) {
+          dataDeps = dataDeps.updated(p, replaceParent(pipe.dataDeps(p), nodeToCache, newId))
+          fitDeps = fitDeps.updated(p, replaceParent(pipe.fitDeps(p), nodeToCache, newId))
+        }
+
+        val newSink = if (nodeToCache == pipe.sink) newId else pipe.sink
+
+        new ConcretePipeline[A,B](newNodes, newDataDeps, newFitDeps, newSink)
+      }
     }
-
-    val newSink = if (nodeToCache == pipe.sink) newId else pipe.sink
-
-    new ConcretePipeline[A,B](newNodes, newDataDeps, newFitDeps, newSink)
   }
 
   /**
    * Given a pipeline and a list of nodes to cache, actually construct a cached DAG.
    */
-  def makeCachedPipeline[A,B](pipe: Pipeline[A,B], cached: Seq[Int]): Pipeline[A,B] = {
+  def makeCachedPipeline[A,B](pipe: Pipeline[A,B], cached: Set[Int]): Pipeline[A,B] = {
     //Find the indexes of the new caching nodes.
-    val cacheIndexes = cached.zipWithIndex.filter(_._1 > 0).map(_._2)
+    val filteredCaches = pipe.nodes.zipWithIndex.filter ( _._1 match {
+      case x: EstimatorNode => false
+      case _ => true
+    }).map(_._2).toSet
 
-    //Replace the caching node with a new node.
-    //Two step process - first, we create a new node.
+    logInfo(s"Filtered caches: ${filteredCaches}")
+    val toCache = cached.intersect(filteredCaches)
+    logInfo(s"Caching: ${toCache.map(i => (i, pipe.nodes(i)))}")
+
     var pipeline = pipe
-    cacheIndexes.foreach { i =>
+    toCache.foreach { i =>
+      logInfo(s"Adding cache: $i, ${pipeline.nodes(i)}")
       pipeline = addCached(pipeline, i)
+      logInfo(s"Cached: $i")
+      logInfo(s"Dot ${pipeline.toDOTString}")
     }
 
     pipeline
   }
 
-  def bruteForceOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = {
+  def bruteForceOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = ??? /*{
     val (cacheSpec, time) = caches(pipe.nodes.length)  //Todo - filter out cache specs involving an estimator.
       .map(c => (c, PipelineRuntimeEstimator.estimateRunTime(pipe, Some(c)))) //Todo - filter out cache specs where mem usage is too high.
       .minBy(_._2)
 
     makeCachedPipeline(pipe, cacheSpec)
-  }
+  }*/
 
-  def caches(len: Int): Iterator[Seq[Int]] = {
+  def caches(len: Int): Iterator[Set[Int]] = ???/*{
     //Todo: make this faster with bit flipping an Array of size `len` and no copies.
     //The loop:
     //   def f(x: Int) { var i = 0L ; while (i < 1L << x) { i+=1 } }
@@ -264,7 +301,7 @@ object PipelineOptimizer extends Logging {
     new Iterator[Seq[Int]] {
       var i = 0L
 
-      def hasNext() = {
+      def hasNext = {
         i < (1L << len)
       }
 
@@ -272,20 +309,76 @@ object PipelineOptimizer extends Logging {
         val out = i.toBinaryString.map(_.asDigit)
         i+=1
 
-        Seq.fill(len - out.length)(0) ++ out
+        (Seq.fill(len - out.length)(0) ++ out).toSet //TODO: This is totally broken!!!
       }
     }
-  }
+  }*/
 }
 
-object GreedyOptimizer {
-  //def cacheMem()
-  //def runs
+object GreedyOptimizer extends Logging {
+  def cacheMem(caches: Set[Int], profiles: Map[Int, Profile]): Long = {
+    caches.map(i => profiles(i).mem).sum
+  }
 
-  def greedyOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = {
+  def greedyCacheSelect[A,B](pipe: Pipeline[A,B], profiles: Map[Int,Profile], maxMem: Long): Set[Int] = {
+    //Initial decision is to just cache everything.
+    val initSet = pipe.nodes.zipWithIndex.filter(_._1 match {
+      case x: EstimatorNode => true
+      case _ => false
+    }).map(_._2).toSet
+
+    var caches = initSet
+
+    var runs = PipelineRuntimeEstimator.getRuns(pipe, caches)
+    var usedMem = cacheMem(caches, profiles)
+
+    def stillRoom(caches: Set[Int], runs: Map[Int, Int], spaceLeft: Long): Boolean = {
+      runs.filter(i => i._2 > 1 && !caches.contains(i._1) && profiles(i._1).mem < spaceLeft).nonEmpty
+    }
+
+    def selectNext(caches: Set[Int], runs: Map[Int, Int], spaceLeft: Long): Int = {
+      val localWork = pipe.nodes.indices.map(i => (i, profiles(i).ns.toDouble)).toMap
+      val cacheMap = pipe.nodes.indices.map(i => (i, if (caches.contains(i)) 1.0 else 0.0)).toMap
+
+      log.info(s"CacheMap: ${cacheMap}")
+
+      //Get the uncached node which fits that maximizes savings in runtime.
+      pipe.nodes.indices
+        .filter(i => cacheMap(i) < 1 && profiles(i).mem < spaceLeft)
+        .map(i => ((runs(i)-1)*PipelineRuntimeEstimator.cachedRuntime(pipe, i, cacheMap, runs, localWork), i))
+        .maxBy(_._1)._2
+    }
+
+    logInfo("Here we go.")
+    logInfo(s"Usedmem: ${usedMem}, MaxMem: ${maxMem}, Runs: ${runs}")
+    while (usedMem < maxMem && stillRoom(caches, runs, maxMem - usedMem)) {
+      logInfo("In the loop.")
+      caches = caches + selectNext(caches, runs, maxMem - usedMem)
+      runs = PipelineRuntimeEstimator.getRuns(pipe, caches)
+      usedMem = cacheMem(caches, profiles)
+    }
+
+    //Return the cache set.
+    val cacheInfo = caches.map(i => (pipe.nodes(i), profiles(i)))
+    logInfo(s"Cached stuff: $cacheInfo")
+
+    caches
+  }
+
+  def greedyOptimizer[A,B](pipe: Pipeline[A,B], data: RDD[A], maxMem: Long, profs: Option[Map[Int,Profile]]=None): (Pipeline[A,B], Set[Int]) = {
     //Step 1 - build profile of the uncached execution.
-    //pipe.nodes.map
-    pipe
+    val profiles = profs match {
+      case Some(x) => x
+      case None => PipelineRuntimeEstimator.estimateNodes(pipe.asInstanceOf[ConcretePipeline[A,B]], data)
+    }
+
+    //Step 2 - do the optimization routine.
+    val caches = greedyCacheSelect(pipe, profiles, maxMem)
+
+    println(s"Caches: ${caches}")
+
+    //Step 3 - given the output of the optimization routine, return an updated pipeline.
+    (PipelineOptimizer.makeCachedPipeline(pipe, caches), caches)
   }
 }
 
@@ -301,7 +394,7 @@ trait HasProfile {
 
 object DAGWriter {
 
-  case class DAG(vertices: Map[String,Profile], edges: List[(String,String)], sink: Int)
+  case class DAG(vertices: Map[String,Profile], edges: List[(String,String)], sink: String)
   implicit def ProfileCodecJson = casecodec3(Profile.apply, Profile.unapply)("loc","bytes","mem")
   implicit def DAGCodecJson = casecodec3(DAG.apply, DAG.unapply)("vertices","edges","sink")
 
@@ -309,16 +402,25 @@ object DAGWriter {
     val p = pipe.asInstanceOf[ConcretePipeline[A,B]]
 
     //Produce a list of edges from the adjacency list.
-    val edges = p.dataDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2))) ++
-                p.fitDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2)))
+    val edges = (p.dataDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2))) ++
+                p.fitDeps.zipWithIndex.flatMap(m => m._1.map(s => (s,m._2))))
+                .filter(s => !(s._1 == -1 || s._2 == -1))
 
     val vertices = prof.map(s => (s._1.toString, s._2)).toMap
 
-    DAG(vertices, edges.map(s => (s._1.toString, s._2.toString)).toList, pipe.sink)
+    DAG(vertices, edges.map(s => (s._1.toString, s._2.toString)).toList, pipe.sink.toString)
   }
 
   def toJson[A,B](pipe: Pipeline[A,B], prof: Map[Int, Profile]): String = {
     toDAG(pipe, prof).asJson.spaces2
   }
-}
 
+  def toJson(profiles: Map[Int,Profile]): String = {
+    profiles.map(x => (x._1.toString,x._2)).asJson.spaces2
+  }
+
+  def profilesFromJson(json: String): Map[Int, Profile] = {
+    val res = json.decodeOption[Map[String,Profile]]
+    res.get.map(x => (x._1.toInt,x._2)).toMap
+  }
+}

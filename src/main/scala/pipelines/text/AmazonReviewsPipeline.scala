@@ -48,11 +48,11 @@ object AmazonReviewsPipeline extends Logging {
   }
 
   case class AmazonReviewsConfig(
-                               trainLocation: String = "",
-                               testLocation: String = "",
-                               threshold: Double = 3.5,
-                               nGrams: Int = 2,
-                               commonFeatures: Int = 100000)
+      trainLocation: String = "",
+      testLocation: String = "",
+      threshold: Double = 3.5,
+      nGrams: Int = 2,
+      commonFeatures: Int = 100000)
 
   def parse(args: Array[String]): AmazonReviewsConfig = new OptionParser[AmazonReviewsConfig](appName) {
     head(appName, "0.1")

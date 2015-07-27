@@ -1,12 +1,18 @@
 package workflow
 
+import java.nio.file.{Paths, Files}
+
+import breeze.linalg.DenseVector
+import loaders.{VOCLabelPath, VOCDataPath, VOCLoader, LabeledData}
 import nodes.learning.NaiveBayesEstimator
 import nodes.nlp.{LowerCase, Trim, Tokenizer, NGramsFeaturizer}
 import nodes.stats.TermFrequency
 import org.apache.spark.SparkContext
+import org.apache.spark.rdd.RDD
 import org.scalatest.FunSuite
 import pipelines.{LocalSparkContext, Logging}
 import nodes.util.{MaxClassifier, CommonSparseFeatures, Identity}
+import utils.{ObjectUtils, Image, TestUtils}
 import scala.tools.nsc.io
 import sys.process._
 
@@ -19,18 +25,15 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     spec
   }
 
+  def makeConcrete[A](pipe: Pipeline[A,_]): ConcretePipeline[A,_] = {
+    new ConcretePipeline(pipe.nodes, pipe.dataDeps, pipe.fitDeps, pipe.sink)
+  }
+
   def getPredictorPipeline(sc: SparkContext) = {
     val data = sc.parallelize(Array("this is", "some there", "some text that"))
     val labels = sc.parallelize(Array(0, 1, 1))
 
-    val pipe = Trim andThen
-      LowerCase() andThen
-      Tokenizer() andThen
-      NGramsFeaturizer(1 to 2) andThen
-      TermFrequency(x => 1) andThen
-      (CommonSparseFeatures(100), data) andThen
-      (NaiveBayesEstimator(2), data, labels) andThen
-      MaxClassifier
+    val pipe = WorkflowUtils.getNewsgroupsPipeline(LabeledData(labels.zip(data)))
 
     (pipe, data)
   }
@@ -46,22 +49,20 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     val (predictorPipeline, data) = getPredictorPipeline(sc)
 
     val toCache = predictorPipeline.nodes.zipWithIndex.filter { _._1 match {
-      case e: EstimatorNode => true
-      case _ => false
-    }}.map(_._2)
-
-    val spec = makeCacheSpec(predictorPipeline, toCache)
+      case e: EstimatorNode => false
+      case _ => true
+    }}.map(_._2).toSet
 
     log.info(s"old debug string: ${predictorPipeline.toDOTString}")
     makePdf(predictorPipeline, "oldPipe")
 
-    val newPipe = PipelineOptimizer.makeCachedPipeline(predictorPipeline, spec)
+    val newPipe = PipelineOptimizer.makeCachedPipeline(predictorPipeline, toCache)
 
     log.info(s"new debug string: ${newPipe.toDOTString}")
     makePdf(newPipe, "newPipe")
   }
 
-  test("Estimating a transformer") {
+  /*test("Estimating a transformer") {
     sc = new SparkContext("local", "test")
 
     val (predictorPipeline, data) = getPredictorPipeline(sc)
@@ -127,11 +128,107 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     val dataSample = dataFull.data.sample(true, 0.01, 42).cache()
     logInfo(s"Data sample size: ${dataSample.count}")
 
-    val ests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Seq(), dataSample)
+    val ests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Set(), dataSample)
     log.info(s"Est: ${ests}")
 
-    val cests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Seq(1,5,14,6,15,13), dataSample)
+    val cests = PipelineRuntimeEstimator.estimateCachedRunTime(fitPipe.asInstanceOf[ConcretePipeline[String,_]], Set(1,5,14,6,15,13), dataSample)
     log.info(s"Est: ${cests}")
+  }
 
+  test("Make sure we can serialize a thing to JSON") {
+    sc = new SparkContext("local", "test")
+
+    val (pipe, data) = getPredictorPipeline(sc)
+    val fitPipe = Optimizer.execute(pipe)
+
+    val profiles = PipelineRuntimeEstimator.estimateNodes(makeConcrete(fitPipe), data)
+
+    log.info(s"Json: ${DAGWriter.toJson(fitPipe, profiles)}")
+  }
+
+  test("Brute force optimizer on the Newsgorups pipeline") {
+    sc = new SparkContext("local", "test")
+
+    val (pipe, data) = getPredictorPipeline(sc)
+    val fitPipe = Optimizer.execute(pipe)
+
+    val optimizedPipe = GreedyOptimizer.greedyOptimizer(fitPipe, data, 10000)
+  }*/
+
+
+  test("Outputting and trying to brute force VOC pipeline") {
+    sc = new SparkContext("local", "test")
+
+    val vocSamplePath = VOCDataPath(
+      TestUtils.getTestResourceFileName("images/vocdata.tar"),
+      "VOCdevkit/VOC2007/JPEGImages/", Some(1)
+    )
+    val vocSampleLabelPath = VOCLabelPath(TestUtils.getTestResourceFileName("images/voclabels.csv"))
+
+    val data = VOCLoader(sc, vocSamplePath, vocSampleLabelPath).sample(false, 0.05, 42).repartition(2).cache()
+    logInfo(s"Data is size ${data.count}")
+
+    val pipe = WorkflowUtils.getVocPipeline(data)
+
+    log.info(s"DOT String: ${pipe.toDOTString}")
+    val fitPipe = Optimizer.execute(pipe)
+
+    makePdf(fitPipe, "vocPipe")
+
+    val cFitPipe = makeConcrete(fitPipe)
+    log.info(s"Concrete DOT String: ${cFitPipe.toDOTString}")
+
+    val profilesFilename = "vocprofiles.json"
+
+    val profiles = if(Files.exists(Paths.get(profilesFilename))) {
+      DAGWriter.profilesFromJson(ObjectUtils.readFile(profilesFilename))
+    } else {
+      val profs = PipelineRuntimeEstimator.estimateNodes(cFitPipe, data.map(_.image))
+      ObjectUtils.writeFile(DAGWriter.toJson(profs), profilesFilename)
+      profs
+    }
+
+    log.info(s"VOC JSON String: ${DAGWriter.toJson(fitPipe, profiles)}")
+
+    val (optimizedPipe, caches) = GreedyOptimizer.greedyOptimizer(cFitPipe, data.map(_.image), 1000*1024*1024, Some(profiles))
+    /*
+    val start = System.nanoTime
+    val res = optimizedPipe(data.map(_.image))
+    val actualTime = System.nanoTime - start
+    */
+
+    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
+      case e: EstimatorNode => true
+      case _ => false
+    }}.map(_._2).toSet
+
+    val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      caches.union(estNodes),
+      data.map(_.image),
+      Some(profiles)
+    )
+    logInfo(s"Greedy estimated time: ${estimatedTime}")
+    /*
+    def relativeTime(t1: Long, t2: Double): Double = 2*(t1-t2)/(t1+t2)
+
+    log.info(s"GREEDY Actual time: $actualTime, Estimated time: $estimatedTime")
+    log.info(s"GREEDY Relative: ${relativeTime(actualTime,estimatedTime)}")
+
+    val allpipe = PipelineOptimizer.makeCachedPipeline(cFitPipe, cFitPipe.nodes.indices.toSet)
+    val allStart = System.nanoTime()
+    val allres = allpipe(data.map(_.image))
+    val allActualTime = System.nanoTime() - allStart
+
+    val allEstimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      cFitPipe.nodes.indices.toSet,
+      data.map(_.image),
+      Some(profiles)
+    )
+
+    log.info(s"EVERYTHING Actual time: $allActualTime, Estimated time: $allEstimatedTime")
+    log.info(s"EVERYTHING Relative: ${relativeTime(allActualTime,allEstimatedTime)}")
+    */
   }
 }

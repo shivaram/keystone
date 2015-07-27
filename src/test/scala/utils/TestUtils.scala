@@ -1,6 +1,6 @@
 package utils
 
-import java.io.{FileReader, ByteArrayInputStream}
+import java.io._
 import org.apache.commons.io.IOUtils
 
 import scala.io.Source
