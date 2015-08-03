@@ -165,7 +165,8 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     )
     val vocSampleLabelPath = VOCLabelPath(TestUtils.getTestResourceFileName("images/voclabels.csv"))
 
-    val data = VOCLoader(sc, vocSamplePath, vocSampleLabelPath).sample(false, 0.05, 42).repartition(2).cache()
+    val prop = 0.05
+    val data = VOCLoader(sc, vocSamplePath, vocSampleLabelPath).sample(false, prop, 42).repartition(2).cache()
     logInfo(s"Data is size ${data.count}")
 
     val pipe = WorkflowUtils.getVocPipeline(data)
@@ -178,7 +179,14 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     val cFitPipe = makeConcrete(fitPipe)
     log.info(s"Concrete DOT String: ${cFitPipe.toDOTString}")
 
-    val profilesFilename = "vocprofiles.json"
+    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
+      case e: EstimatorNode => true
+      case _ => false
+    }}.map(_._2).toSet
+
+    logInfo(s"Estimator nodes: $estNodes")
+
+    val profilesFilename = s"vocprofiles$prop.json"
 
     val profiles = if(Files.exists(Paths.get(profilesFilename))) {
       DAGWriter.profilesFromJson(ObjectUtils.readFile(profilesFilename))
@@ -190,17 +198,23 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
 
     log.info(s"VOC JSON String: ${DAGWriter.toJson(fitPipe, profiles)}")
 
+    val uncachedEstimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      estNodes,
+      data.map(_.image),
+      Some(profiles)
+    )
+    logInfo(s"Uncached estimated time: ${uncachedEstimatedTime}")
+
     val (optimizedPipe, caches) = GreedyOptimizer.greedyOptimizer(cFitPipe, data.map(_.image), 1000*1024*1024, Some(profiles))
-    /*
+    logInfo(s"VOC Optimized JSON String: ${optimizedPipe.toDOTString}")
+    makePdf(optimizedPipe, "optimizedVocPipe")
+
     val start = System.nanoTime
     val res = optimizedPipe(data.map(_.image))
+    val greedycount = res.count
     val actualTime = System.nanoTime - start
-    */
 
-    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
-      case e: EstimatorNode => true
-      case _ => false
-    }}.map(_._2).toSet
 
     val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
       cFitPipe,
@@ -209,15 +223,17 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
       Some(profiles)
     )
     logInfo(s"Greedy estimated time: ${estimatedTime}")
-    /*
-    def relativeTime(t1: Long, t2: Double): Double = 2*(t1-t2)/(t1+t2)
+
+    def relativeTime(actual: Long, predicted: Double): Double = predicted/actual
 
     log.info(s"GREEDY Actual time: $actualTime, Estimated time: $estimatedTime")
     log.info(s"GREEDY Relative: ${relativeTime(actualTime,estimatedTime)}")
 
     val allpipe = PipelineOptimizer.makeCachedPipeline(cFitPipe, cFitPipe.nodes.indices.toSet)
+
     val allStart = System.nanoTime()
     val allres = allpipe(data.map(_.image))
+    val count = allres.count
     val allActualTime = System.nanoTime() - allStart
 
     val allEstimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
@@ -229,6 +245,6 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
 
     log.info(s"EVERYTHING Actual time: $allActualTime, Estimated time: $allEstimatedTime")
     log.info(s"EVERYTHING Relative: ${relativeTime(allActualTime,allEstimatedTime)}")
-    */
+
   }
 }

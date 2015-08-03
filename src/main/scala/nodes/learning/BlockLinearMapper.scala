@@ -6,7 +6,7 @@ import nodes.stats.{StandardScalerModel, StandardScaler}
 import org.apache.spark.rdd.RDD
 import nodes.util.{VectorSplitter, Identity}
 import utils.{MatrixUtils, Stats}
-import workflow.{Transformer, LabelEstimator}
+import workflow.{WeightedNode, Transformer, LabelEstimator}
 
 
 /**
@@ -23,7 +23,9 @@ class BlockLinearMapper(
     val blockSize: Int,
     val bOpt: Option[DenseVector[Double]] = None,
     val featureScalersOpt: Option[Seq[Transformer[DenseVector[Double], DenseVector[Double]]]] = None)
-  extends Transformer[DenseVector[Double], DenseVector[Double]] {
+  extends Transformer[DenseVector[Double], DenseVector[Double]] with WeightedNode {
+
+  def weight = xs.length
 
   // Use identity nodes if we don't need to do scaling
   val featureScalers = featureScalersOpt.getOrElse(
@@ -145,7 +147,13 @@ class BlockLinearMapper(
  * @param lambda L2-regularization to use
  */
 class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 0.0, numFeaturesOpt: Option[Int] = None)
-  extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]] {
+  extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]]
+  with WeightedNode {
+
+  def weight = numFeaturesOpt match {
+    case Some(x) => math.ceil(x.toDouble/blockSize).toInt
+    case None => 1
+  }
 
   /**
    * Fit a model using blocks of features and labels provided.

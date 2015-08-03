@@ -22,3 +22,8 @@ private[workflow] case class DataNode(rdd: RDD[_]) extends Node {
   override def label: String = "%s[%d]".format(
     Option(rdd.name).map(_ + " ").getOrElse(""), rdd.id)
 }
+
+
+trait WeightedNode {
+  def weight: Int
+}

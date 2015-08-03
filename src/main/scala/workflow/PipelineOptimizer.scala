@@ -144,13 +144,17 @@ object PipelineRuntimeEstimator extends Logging {
       ind: Int,
       cached: Int => Double,
       runs: Int => Int,
-      localWork: Int => Double): Double = {
+      localWork: Int => Double,
+      nodeWeights: Int => Int): Double = {
     if(ind == -1)
       0.0
     else {
+      //logInfo(s"Estimating cached runtime for $ind")
+      //if (cached(ind) > 0.0) logInfo(s"Node is cached: $ind")
       val deps = x.dataDeps(ind) ++ x.fitDeps(ind)
-      (localWork(ind) + deps.map(i => cachedRuntime(x, i, cached, runs, localWork)).sum) /
+      val res = (localWork(ind) + deps.map(i => nodeWeights(ind)*cachedRuntime(x, i, cached, runs, localWork, nodeWeights)).sum) /
         math.pow(runs(ind), cached(ind))
+      res
     }
   }
 
@@ -158,20 +162,43 @@ object PipelineRuntimeEstimator extends Logging {
     x.nodes.indices.map(i => (i, getChildren(x, i))).toMap
   }
 
-  def getRuns(x: Pipeline[_,_], cache: Set[Int]): Map[Int,Int] = {
+  def getRuns(x: Pipeline[_,_], cache: Set[Int], nodeWeights: Int => Int): Map[Int,Int] = {
     val succ = getSuccs(x)
 
     def r(i: Int): Int = {
       if (succ(i).isEmpty) {
-        1
+        nodeWeights(i)
       }
       else {
-        succ(i).map(j => if(cache.contains(j)) 1 else r(j)).sum
+        succ(i).map(j => if(cache.contains(j)) nodeWeights(j) else nodeWeights(j)*r(j)).sum
       }
     }
 
     x.nodes.indices.map(i => (i, r(i))).toMap
   }
+
+  //Get node weights
+  def getNodeWeights(x: Pipeline[_,_]): Int => Int = {
+    x.nodes.zipWithIndex.map { n =>
+      n._1 match {
+        case node: WeightedNode => {
+          logInfo(s"Found a weighted node: $node, ${node.weight}")
+          (n._2, node.weight)
+        }
+        //Since the transformer hasn't been estimated yet,
+        //for now, we assume this takes as many passes as its parent.
+        case d: DelegatingTransformer[_] => {
+          val parent = x.nodes(x.fitDeps(n._2).head)
+          parent match {
+            case p: WeightedNode => (n._2, p.weight)
+            case _ => (n._2, 1)
+          }
+        }
+        case _ => (n._2, 1)
+      }
+    }.toMap
+  }
+
 
   def estimateCachedRunTime[A](x: ConcretePipeline[A,_], cached: Set[Int], data: RDD[A], profs: Option[Map[Int,Profile]] = None): Double = {
 
@@ -181,6 +208,9 @@ object PipelineRuntimeEstimator extends Logging {
       case None => x.nodes.indices.map(i => (i,estimateNode(x, i, data))).toMap
     }
 
+    val nodeWeights = getNodeWeights(x)
+    logInfo(s"Node weights: $nodeWeights")
+
     x.nodes.indices.map(i => (x.nodes(i), profiles(i))).foreach(println)
 
     val localWork = x.nodes.indices.map(i => profiles(i).ns.toDouble).toArray
@@ -189,9 +219,9 @@ object PipelineRuntimeEstimator extends Logging {
     val cachedMap = x.nodes.indices.map(i => if (cached contains i) 1.0 else 0.0).toArray
 
     //Given a pipeline, compute the number of paths from each node to sink.
-    val runs = getRuns(x, cached)
-
-    cachedRuntime(x, x.sink, cachedMap, runs, localWork)
+    val runs = getRuns(x, cached, nodeWeights)
+    logInfo(s"Runs: $runs")
+    cachedRuntime(x, x.sink, cachedMap, runs, localWork, nodeWeights)
   }
 
   def estimateNodes[A](x: ConcretePipeline[A,_], data: RDD[A]): Map[Int,Profile] = {
@@ -244,13 +274,10 @@ object PipelineOptimizer extends Logging {
         var newDataDeps = pipe.dataDeps :+ Seq(nodeToCache)
         var newFitDeps = pipe.fitDeps :+ Seq()
 
-        var dataDeps = pipe.dataDeps
-        var fitDeps = pipe.fitDeps
-
         //For each of the nodes children, modify its parents to point to the new id.
         for(p <- nodeChildren) {
-          dataDeps = dataDeps.updated(p, replaceParent(pipe.dataDeps(p), nodeToCache, newId))
-          fitDeps = fitDeps.updated(p, replaceParent(pipe.fitDeps(p), nodeToCache, newId))
+          newDataDeps = newDataDeps.updated(p, replaceParent(pipe.dataDeps(p), nodeToCache, newId))
+          newFitDeps = newFitDeps.updated(p, replaceParent(pipe.fitDeps(p), nodeToCache, newId))
         }
 
         val newSink = if (nodeToCache == pipe.sink) newId else pipe.sink
@@ -276,10 +303,7 @@ object PipelineOptimizer extends Logging {
 
     var pipeline = pipe
     toCache.foreach { i =>
-      logInfo(s"Adding cache: $i, ${pipeline.nodes(i)}")
       pipeline = addCached(pipeline, i)
-      logInfo(s"Cached: $i")
-      logInfo(s"Dot ${pipeline.toDOTString}")
     }
 
     pipeline
@@ -322,14 +346,18 @@ object GreedyOptimizer extends Logging {
 
   def greedyCacheSelect[A,B](pipe: Pipeline[A,B], profiles: Map[Int,Profile], maxMem: Long): Set[Int] = {
     //Initial decision is to just cache everything.
-    val initSet = pipe.nodes.zipWithIndex.filter(_._1 match {
+    val initSet = Set[Int]() /*pipe.nodes.zipWithIndex.filter(_._1 match {
       case x: EstimatorNode => true
       case _ => false
-    }).map(_._2).toSet
+    }).map(_._2).toSet*/
 
     var caches = initSet
 
-    var runs = PipelineRuntimeEstimator.getRuns(pipe, caches)
+    val nodeWeights = PipelineRuntimeEstimator.getNodeWeights(pipe)
+    logInfo(s"Node weights: $nodeWeights")
+
+    var runs = PipelineRuntimeEstimator.getRuns(pipe, caches, nodeWeights)
+    logInfo(s"Runs: $runs")
     var usedMem = cacheMem(caches, profiles)
 
     def stillRoom(caches: Set[Int], runs: Map[Int, Int], spaceLeft: Long): Boolean = {
@@ -340,12 +368,10 @@ object GreedyOptimizer extends Logging {
       val localWork = pipe.nodes.indices.map(i => (i, profiles(i).ns.toDouble)).toMap
       val cacheMap = pipe.nodes.indices.map(i => (i, if (caches.contains(i)) 1.0 else 0.0)).toMap
 
-      log.info(s"CacheMap: ${cacheMap}")
-
       //Get the uncached node which fits that maximizes savings in runtime.
       pipe.nodes.indices
         .filter(i => cacheMap(i) < 1 && profiles(i).mem < spaceLeft)
-        .map(i => ((runs(i)-1)*PipelineRuntimeEstimator.cachedRuntime(pipe, i, cacheMap, runs, localWork), i))
+        .map(i => ((runs(i)-1)*PipelineRuntimeEstimator.cachedRuntime(pipe, i, cacheMap, runs, localWork, nodeWeights), i))
         .maxBy(_._1)._2
     }
 
@@ -354,7 +380,8 @@ object GreedyOptimizer extends Logging {
     while (usedMem < maxMem && stillRoom(caches, runs, maxMem - usedMem)) {
       logInfo("In the loop.")
       caches = caches + selectNext(caches, runs, maxMem - usedMem)
-      runs = PipelineRuntimeEstimator.getRuns(pipe, caches)
+      runs = PipelineRuntimeEstimator.getRuns(pipe, caches, nodeWeights)
+      logInfo(s"Runs: $runs")
       usedMem = cacheMem(caches, profiles)
     }
 
