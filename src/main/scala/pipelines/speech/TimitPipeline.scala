@@ -10,7 +10,7 @@ import org.apache.spark.rdd.RDD
 
 import evaluation.MulticlassClassifierEvaluator
 import loaders.TimitFeaturesDataLoader
-import nodes.learning.{BlockLinearMapper, BlockLeastSquaresEstimator}
+import nodes.learning.{BlockLinearMapper, BlockLeastSquaresEstimator, BlockWeightedLeastSquaresEstimator}
 import nodes.stats.{CosineRandomFeatures, StandardScaler}
 import nodes.util.{ClassLabelIndicatorsFromIntLabels, MaxClassifier}
 
@@ -30,6 +30,7 @@ object TimitPipeline extends Logging {
     gamma: Double = 0.05555,
     rfType: Distributions.Value = Distributions.Gaussian,
     lambda: Double = 0.0,
+    mixtureWeight: Double = 0.1,
     numEpochs: Int = 5,
     checkpointDir: Option[String] = None)
 
@@ -100,8 +101,8 @@ object TimitPipeline extends Logging {
     val actual = timitFeaturesData.test.labels.cache().setName("actual")
 
     // Train the model
-    val blockLinearMapper = new BlockLeastSquaresEstimator(
-      numCosineFeatures, conf.numEpochs, conf.lambda).fit(trainingBatches, labels)
+    val blockLinearMapper = new BlockWeightedLeastSquaresEstimator(
+      numCosineFeatures, conf.numEpochs, conf.lambda, conf.mixtureWeight).fit(trainingBatches, labels)
 
     // Calculate test error
     blockLinearMapper.applyAndEvaluate(testBatches,
@@ -132,6 +133,7 @@ object TimitPipeline extends Logging {
     opt[Int]("numParts") action { (x,c) => c.copy(numParts=x) }
     opt[Int]("numCosines") action { (x,c) => c.copy(numCosines=x) }
     opt[Int]("numEpochs") action { (x,c) => c.copy(numEpochs=x) }
+    opt[Double]("mixtureWeight") action { (x,c) => c.copy(mixtureWeight=x) }
     opt[Double]("gamma") action { (x,c) => c.copy(gamma=x) }
     opt[Double]("lambda") action { (x,c) => c.copy(lambda=x) }
     opt("rfType")(scopt.Read.reads(Distributions withName _)) action { (x,c) => c.copy(rfType = x)}
