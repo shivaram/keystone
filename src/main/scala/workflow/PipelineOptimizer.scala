@@ -2,6 +2,7 @@ package workflow
 
 import java.io.{ByteArrayOutputStream, ObjectOutputStream}
 
+import breeze.linalg._
 import nodes.util.Cacher
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.SparkUtilWrapper
@@ -73,28 +74,31 @@ object PipelineRuntimeEstimator extends Logging {
   }
 
 
-  def estimateNode[A](pipe: ConcretePipeline[A,_], node: Int, sample: RDD[A]): Profile = {
-    //TODO: this code only served as an exercise to make sure i could do this stuff.
-    //val estimates = pipe.nodes.map( n => {
-    //  n match {
-    //    case t: HasEstimator => t.estimate(20)
-    //    case _ => Estimate(0,0,0)
-    //  }
-    //}).reduce(_ + _)
+  //Todo, this horren
+  def estimateNode[A,B](pipe: ConcretePipeline[A,B], node: Int, sample: RDD[A], dataDepsMap: Option[Map[Int,RDD[A]]] = None, fitDepsMap: Option[Map[Int,TransformerNode[_]]] = None): Profile = {
 
     //Make sure all data dependencies are evaluated
     val dataDeps = pipe.dataDeps(node)
-    val dataDepRDDs = dataDeps.map(p => pipe.rddDataEval(p, sample).cache())
 
-    //Force the data to be materialized.
-    dataDepRDDs.map(_.count)
+    val dataDepRDDs = dataDepsMap match {
+      case Some(x) => dataDeps.map(x)
+      case None => {
+        val res = dataDeps.map(p => pipe.rddDataEval(p, sample).cache())
+        //Force the data to be materialized.
+        res.map(_.count)
+        res
+      }
+    }
 
     val est = pipe.nodes(node) match {
 
       case transformer: TransformerNode[_] => {
         ////Now make sure we have all our fit dependencies.
         val fitDeps = pipe.fitDeps(node)
-        val fitDepsTransformers = fitDeps.map(pipe.fitEstimator)
+        val fitDepsTransformers = fitDepsMap match {
+          case Some(x) => fitDeps.map(x)
+          case None => fitDeps.map(pipe.fitEstimator)
+        }
 
         //Fit Dependencies.
         val res = transformer.transformRDD(dataDepRDDs, fitDepsTransformers).cache()
@@ -105,6 +109,7 @@ object PipelineRuntimeEstimator extends Logging {
 
         //This is ripped from RDD.toDebugString()
         logInfo(res.toDebugString)
+        logInfo(sample.context.getRDDStorageInfo.mkString("\n"))
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
         res.unpersist()
 
@@ -167,7 +172,7 @@ object PipelineRuntimeEstimator extends Logging {
 
     def r(i: Int): Int = {
       if (succ(i).isEmpty) {
-        nodeWeights(i)
+        1
       }
       else {
         succ(i).map(j => if(cache.contains(j)) nodeWeights(j) else nodeWeights(j)*r(j)).sum
@@ -178,11 +183,13 @@ object PipelineRuntimeEstimator extends Logging {
   }
 
   //Get node weights
+  //BUG IS HERE OR IN THE USE OF THIS VARIABLE>
+  //WHEN WE ADD A WEIGHT TO A NODE WE ARE *NOT* increasing its calls. just the calls of its children.
   def getNodeWeights(x: Pipeline[_,_]): Int => Int = {
     x.nodes.zipWithIndex.map { n =>
       n._1 match {
         case node: WeightedNode => {
-          logInfo(s"Found a weighted node: $node, ${node.weight}")
+          //logInfo(s"Found a weighted node: $node, ${node.weight}")
           (n._2, node.weight)
         }
         //Since the transformer hasn't been estimated yet,
@@ -200,7 +207,7 @@ object PipelineRuntimeEstimator extends Logging {
   }
 
 
-  def estimateCachedRunTime[A](x: ConcretePipeline[A,_], cached: Set[Int], data: RDD[A], profs: Option[Map[Int,Profile]] = None): Double = {
+  def estimateCachedRunTime[A,_](x: ConcretePipeline[A,_], cached: Set[Int], data: RDD[A], profs: Option[Map[Int,Profile]] = None): Double = {
 
     //Gather runtime statistics.
     val profiles = profs match {
@@ -209,9 +216,9 @@ object PipelineRuntimeEstimator extends Logging {
     }
 
     val nodeWeights = getNodeWeights(x)
-    logInfo(s"Node weights: $nodeWeights")
+    //logInfo(s"Node weights: $nodeWeights")
 
-    x.nodes.indices.map(i => (x.nodes(i), profiles(i))).foreach(println)
+    //x.nodes.indices.map(i => (x.nodes(i), profiles(i))).foreach(println)
 
     val localWork = x.nodes.indices.map(i => profiles(i).ns.toDouble).toArray
 
@@ -220,11 +227,11 @@ object PipelineRuntimeEstimator extends Logging {
 
     //Given a pipeline, compute the number of paths from each node to sink.
     val runs = getRuns(x, cached, nodeWeights)
-    logInfo(s"Runs: $runs")
+    //logInfo(s"Runs: $runs")
     cachedRuntime(x, x.sink, cachedMap, runs, localWork, nodeWeights)
   }
 
-  def estimateNodes[A](x: ConcretePipeline[A,_], data: RDD[A]): Map[Int,Profile] = {
+  def estimateNodes[A,_](x: ConcretePipeline[A,_], data: RDD[A]): Map[Int,Profile] = {
     //TODO: Make this a recursive thing that is smart about caching.
     //Essentially estimateNode(pipe, id, profiles: Map[Id,Profile], intermediate_res: Map[Id,Result]
     //Then we proceed recursively, iteratively building up what we need to.
@@ -236,7 +243,55 @@ object PipelineRuntimeEstimator extends Logging {
 
     //Alternatively - topologically sort the dag and execute in order, then you won't have anything missing.
 
-    x.nodes.indices.map(i => (i, estimateNode(x, i, data))).toMap
+    x.nodes.indices.map(i => {
+      //logInfo(s"Estimating ${x.nodes(i)}")
+      (i, estimateNode(x, i, data))}).toMap
+  }
+
+  /**
+   * Given a target data scale and a set of sampled profiles, generalize the samples to the new data scale.
+   *
+   * We start by flattening all observations into a collection of (nodeid, measurement, scale, value), grouping by
+   * nodeid and measurement, and then performing a regression on each group.
+   *
+   * We then use the results of the regression to infer scaling behavior and assume it to be linear or flat.
+   *
+   * Finally, a new profile is generated that is the "inferred" profile.
+   *
+   * @param newScale
+   * @param profiles
+   * @return
+   */
+  def generalizeProfiles(newScale: Double, profiles: Map[Int, Map[Int, Profile]]): Map[Int, Profile] = {
+    def getModel(inp: Iterable[(Int, Int, String, Long)]): Double => Double = {
+      val observations = inp.toArray
+
+      //Pack a data matrix with observations
+      val X = DenseMatrix.ones[Double](observations.length, 2)
+      observations.zipWithIndex.foreach(o => X(o._2, 0) = o._1._4.toDouble)
+      val y = DenseVector(observations.map(_._4.toDouble))
+      val model = X \ y
+
+      //A function to apply the model.
+      def res(x: Double): Double = DenseVector(x, 1.0).t * model
+
+      res
+    }
+
+    val samples = profiles.flatMap { case (scale, prof) => prof.flatMap { case (node, value) =>
+      Array(
+        (scale, node, "memory", value.mem),
+        (scale, node, "time", value.ns)
+      )}}.groupBy(a => (a._2, a._3))
+
+    val models = samples.mapValues(getModel)
+
+    val nodeIds = profiles.head._2.keys
+
+    nodeIds.map(n => {
+      val prof = Profile((models((n, "time")))(newScale).toLong, 0, (models((n,"memory")))(newScale).toLong)
+      (n, prof)
+    }).toMap
   }
 
 }
@@ -309,34 +364,25 @@ object PipelineOptimizer extends Logging {
     pipeline
   }
 
-  def bruteForceOptimizer[A,B](pipe: Pipeline[A,B]): Pipeline[A,B] = ??? /*{
-    val (cacheSpec, time) = caches(pipe.nodes.length)  //Todo - filter out cache specs involving an estimator.
-      .map(c => (c, PipelineRuntimeEstimator.estimateRunTime(pipe, Some(c)))) //Todo - filter out cache specs where mem usage is too high.
-      .minBy(_._2)
+  def prunedBruteForceOptimizer[A,B](pipe: ConcretePipeline[A,B], data: RDD[A], cached: Set[Int], maxMem: Long, profs: Map[Int, Profile]): (Pipeline[A,B], Set[Int]) = {
+    val runs = PipelineRuntimeEstimator.getRuns(pipe, cached, PipelineRuntimeEstimator.getNodeWeights(pipe))
 
-    makeCachedPipeline(pipe, cacheSpec)
-  }*/
+    val candidates = runs.filter(_._2 > 1).map(_._1).toSet.diff(cached) //The nodes which aren't already cached that have more than 1 run.
 
-  def caches(len: Int): Iterator[Set[Int]] = ???/*{
-    //Todo: make this faster with bit flipping an Array of size `len` and no copies.
-    //The loop:
-    //   def f(x: Int) { var i = 0L ; while (i < 1L << x) { i+=1 } }
-    //is several orders of magnitude faster.
-    new Iterator[Seq[Int]] {
-      var i = 0L
+    logInfo(s"Trying all subsets of candidates ${candidates.size}, which is  2^${candidates.size} possibilities. Runs is of size ${runs.size}")
+    logInfo(s"Runs: $runs")
+    val filteredSets = candidates.subsets.filter(_.map(profs).map(_.mem).sum < maxMem)
+    logInfo(s"The nubmer of subsets which fit into memory is: ${filteredSets.size}")
 
-      def hasNext = {
-        i < (1L << len)
-      }
+    val bestSet = candidates.subsets.filter(_.map(profs).map(_.mem).sum < maxMem).map(s => {
+      val res = PipelineRuntimeEstimator.estimateCachedRunTime(pipe, cached ++ s, data, Some(profs))
+      (s,res)
+    })
 
-      def next(): Seq[Int] = {
-        val out = i.toBinaryString.map(_.asDigit)
-        i+=1
+    val res = if (bestSet.isEmpty) Set[Int]() else bestSet.minBy(_._2)._1
 
-        (Seq.fill(len - out.length)(0) ++ out).toSet //TODO: This is totally broken!!!
-      }
-    }
-  }*/
+    (makeCachedPipeline(pipe, res ++ cached), res ++ cached)
+  }
 }
 
 object GreedyOptimizer extends Logging {
@@ -392,19 +438,11 @@ object GreedyOptimizer extends Logging {
     caches
   }
 
-  def greedyOptimizer[A,B](pipe: Pipeline[A,B], data: RDD[A], maxMem: Long, profs: Option[Map[Int,Profile]]=None): (Pipeline[A,B], Set[Int]) = {
-    //Step 1 - build profile of the uncached execution.
-    val profiles = profs match {
-      case Some(x) => x
-      case None => PipelineRuntimeEstimator.estimateNodes(pipe.asInstanceOf[ConcretePipeline[A,B]], data)
-    }
-
-    //Step 2 - do the optimization routine.
+  def greedyOptimizer[A,B](pipe: Pipeline[A,B], maxMem: Long, profiles: Map[Int,Profile]): (Pipeline[A,B], Set[Int]) = {
+    //Step 1 - do the optimization routine.
     val caches = greedyCacheSelect(pipe, profiles, maxMem)
 
-    println(s"Caches: ${caches}")
-
-    //Step 3 - given the output of the optimization routine, return an updated pipeline.
+    //Step 2 - given the output of the optimization routine, return an updated pipeline.
     (PipelineOptimizer.makeCachedPipeline(pipe, caches), caches)
   }
 }

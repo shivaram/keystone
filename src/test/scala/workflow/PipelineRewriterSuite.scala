@@ -3,13 +3,15 @@ package workflow
 import java.nio.file.{Paths, Files}
 
 import breeze.linalg.DenseVector
-import loaders.{VOCLabelPath, VOCDataPath, VOCLoader, LabeledData}
+import loaders._
 import nodes.learning.NaiveBayesEstimator
 import nodes.nlp.{LowerCase, Trim, Tokenizer, NGramsFeaturizer}
 import nodes.stats.TermFrequency
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 import org.scalatest.FunSuite
+import pipelines.images.imagenet.ImageNetSiftLcsFV.ImageNetSiftLcsFVConfig
+import pipelines.speech.TimitPipeline.TimitConfig
 import pipelines.{LocalSparkContext, Logging}
 import nodes.util.{MaxClassifier, CommonSparseFeatures, Identity}
 import utils.{ObjectUtils, Image, TestUtils}
@@ -155,7 +157,7 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     val optimizedPipe = GreedyOptimizer.greedyOptimizer(fitPipe, data, 10000)
   }*/
 
-
+   /*
   test("Outputting and trying to brute force VOC pipeline") {
     sc = new SparkContext("local", "test")
 
@@ -246,5 +248,175 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     log.info(s"EVERYTHING Actual time: $allActualTime, Estimated time: $allEstimatedTime")
     log.info(s"EVERYTHING Relative: ${relativeTime(allActualTime,allEstimatedTime)}")
 
+  } */
+
+  /*test("Trying levels of memory for VOC and greedy optimizer.") {
+    sc = new SparkContext("local", "test")
+
+    val vocSamplePath = VOCDataPath(
+      TestUtils.getTestResourceFileName("images/vocdata.tar"),
+      "VOCdevkit/VOC2007/JPEGImages/", Some(1)
+    )
+    val vocSampleLabelPath = VOCLabelPath(TestUtils.getTestResourceFileName("images/voclabels.csv"))
+
+    val prop = 0.05
+    val data = VOCLoader(sc, vocSamplePath, vocSampleLabelPath).sample(false, prop, 42).repartition(2).cache()
+    logInfo(s"Data is size ${data.count}")
+
+    val pipe = WorkflowUtils.getVocPipeline(data)
+
+    log.info(s"DOT String: ${pipe.toDOTString}")
+    val fitPipe = Optimizer.execute(pipe)
+    val cFitPipe = makeConcrete(fitPipe)
+
+    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
+      case e: EstimatorNode => true
+      case _ => false
+    }}.map(_._2).toSet
+
+    logInfo(s"Estimator nodes: $estNodes")
+
+    val profilesFilename = s"vocprofiles$prop.json"
+
+    val profiles = DAGWriter.profilesFromJson(ObjectUtils.readFile(profilesFilename))
+
+    val mems = Array(0, 1, 5, 10, 50, 100, 500, 1000, 5000, 10000)
+
+    val res = mems.map(m => {
+      val (optimizedPipe, caches) = GreedyOptimizer.greedyOptimizer(cFitPipe, data.map(_.image), m * 1024 * 1024, Some(profiles))
+      val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+        cFitPipe,
+        caches.union(estNodes),
+        data.map(_.image),
+        Some(profiles)
+      )
+      (m, estimatedTime)
+    })
+
+    for ( l <- res) {
+      log.info(s"Result: ${l._1}, ${l._2}")
+    }
+
+    val res2 = mems.map(m => {
+      logInfo(s"Brute forcing for m MB: $m")
+      val (optimizedPipe, caches) = PipelineOptimizer.prunedBruteForceOptimizer(cFitPipe, data.map(_.image), estNodes, m * 1024 * 1024, profiles)
+      val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+        cFitPipe,
+        caches.union(estNodes),
+        data.map(_.image),
+        Some(profiles)
+      )
+      (m, estimatedTime)
+    })
+
+    for ( l <- res2) {
+      log.info(s"Brute force result: ${l._1}, ${l._2}")
+    }
+  }*/
+
+  def estimateAndOptimize[A](data: RDD[A], pipe: Pipeline[A,_], basename: String, prop: Double) = {
+    log.info(s"DOT String: ${pipe.toDOTString}")
+    val fitPipe = Optimizer.execute(pipe)
+
+    val cFitPipe = makeConcrete(fitPipe)
+
+    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
+      case e: EstimatorNode => true
+      case _ => false
+    }}.map(_._2).toSet
+
+    logInfo(s"Estimator nodes: $estNodes")
+
+    val profilesFilename = s"$basename$prop.json"
+
+    val profiles = if(Files.exists(Paths.get(profilesFilename))) {
+      DAGWriter.profilesFromJson(ObjectUtils.readFile(profilesFilename))
+    } else {
+      val profs = PipelineRuntimeEstimator.estimateNodes(cFitPipe, data)
+      ObjectUtils.writeFile(DAGWriter.toJson(profs), profilesFilename)
+      profs
+    }
+
+    log.info(s"VOC JSON String: ${DAGWriter.toJson(fitPipe, profiles)}")
+
+    val uncachedEstimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      estNodes,
+      data,
+      Some(profiles)
+    )
+    logInfo(s"Uncached estimated time: ${uncachedEstimatedTime}")
+
+    val (optimizedPipe, caches) = GreedyOptimizer.greedyOptimizer(cFitPipe, data, 1000*1024*1024, Some(profiles))
+    logInfo(s"VOC Optimized JSON String: ${optimizedPipe.toDOTString}")
+    makePdf(optimizedPipe, s"optimized${basename}Pipe")
+
+    val start = System.nanoTime
+    val res = optimizedPipe(data)
+    val greedycount = res.count
+    val actualTime = System.nanoTime - start
+
+
+    val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      caches.union(estNodes),
+      data,
+      Some(profiles)
+    )
+    logInfo(s"Greedy estimated time: ${estimatedTime}")
+
+    def relativeTime(actual: Long, predicted: Double): Double = predicted/actual
+
+    log.info(s"GREEDY Actual time: $actualTime, Estimated time: $estimatedTime")
+    log.info(s"GREEDY Relative: ${relativeTime(actualTime,estimatedTime)}")
+
+    val allpipe = PipelineOptimizer.makeCachedPipeline(cFitPipe, cFitPipe.nodes.indices.toSet)
+
+    val allStart = System.nanoTime()
+    val allres = allpipe(data)
+    val count = allres.count
+    val allActualTime = System.nanoTime() - allStart
+
+    val allEstimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      cFitPipe.nodes.indices.toSet,
+      data,
+      Some(profiles)
+    )
+
+    log.info(s"EVERYTHING Actual time: $allActualTime, Estimated time: $allEstimatedTime")
+    log.info(s"EVERYTHING Relative: ${relativeTime(allActualTime,allEstimatedTime)}")
   }
+
+  /*test("Optimizing ImageNet pipeline.") {
+    sc = new SparkContext("local", "test")
+
+    val prop = 5.0/1.2e6
+    val imagesFile = TestUtils.getTestResourceFileName("images/imagenet/shrink_n15075141.tar")
+    val labelsFile = TestUtils.getTestResourceFileName("images/imagenet-test-labels")
+    val data = ImageNetLoader(sc, imagesFile, labelsFile).cache()
+
+    logInfo(s"Data is size ${data.count}")
+    val conf = ImageNetSiftLcsFVConfig(numPcaSamples = 1e4.toInt, numGmmSamples = 1e4.toInt)
+    val pipe = WorkflowUtils.getImnetPipeline(data, conf)
+
+    estimateAndOptimize(data.map(_.image), pipe, "imnet", prop)
+  }*/
+
+  test("Optimizing TIMIT pipeline.") {
+    sc = new SparkContext("local", "test")
+
+    val trainFile = TestUtils.getTestResourceFileName("speech/timit/timitData200.csv")
+    val labelsFile = TestUtils.getTestResourceFileName("speech/timit/timitLabels200.csv")
+    val allData = TimitFeaturesDataLoader(sc, trainFile, labelsFile, trainFile, labelsFile, 4)
+    val data = allData.train
+    val prop = data.data.count/2e6
+
+    logInfo(s"Data is size ${data.data.count}")
+    val conf = TimitConfig(numCosines = 4)
+    val pipe = WorkflowUtils.getTimitPipeline(data, conf)
+
+    estimateAndOptimize(data.data, pipe, "timit", prop)
+  }
+
 }
