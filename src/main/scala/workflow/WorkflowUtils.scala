@@ -66,15 +66,14 @@ object WorkflowUtils {
     pipeline
   }
 
-  def getNewsgroupsPipeline(trainData: RDD[(Int, String)]) = {
+  def getAmazonPipeline(trainData: RDD[(Int, String)]) = {
     val pipe = Trim andThen
       LowerCase() andThen
       Tokenizer() andThen
       NGramsFeaturizer(1 to 2) andThen
       TermFrequency(x => 1) andThen
-      (CommonSparseFeatures(100), trainData.map(_._2)) andThen
-      (NaiveBayesEstimator(2), trainData.map(_._2), trainData.map(_._1)) andThen
-      MaxClassifier
+      (CommonSparseFeatures(100000), trainData.map(_._2)) andThen
+      (LogisticRegressionLBFGSEstimator(numIters = 20, cache = true), trainData.map(_._2), trainData.map(_._1))
 
     pipe
   }

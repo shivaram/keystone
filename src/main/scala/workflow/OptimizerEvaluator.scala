@@ -4,7 +4,6 @@ import java.nio.file.{Paths, Files}
 
 import breeze.linalg.DenseVector
 import loaders._
-import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, SparkConf}
 import pipelines.Logging
@@ -12,9 +11,11 @@ import pipelines.images.imagenet.ImageNetSiftLcsFV.ImageNetSiftLcsFVConfig
 import pipelines.images.voc.VOCSIFTFisher.SIFTFisherConfig
 import pipelines.speech.TimitPipeline.TimitConfig
 import scopt.OptionParser
+import sys.process._
 import utils.{LabeledImage, MultiLabeledImage, ObjectUtils}
 
 import scala.reflect.ClassTag
+import scala.tools.nsc.io
 
 
 object OptimizerEvaluator extends Logging {
@@ -26,6 +27,17 @@ object OptimizerEvaluator extends Logging {
    */
   def makeConcrete[A,_](pipe: Pipeline[A,_]): ConcretePipeline[A,_] = {
     new ConcretePipeline(pipe.nodes, pipe.dataDeps, pipe.fitDeps, pipe.sink)
+  }
+
+  /**
+   * Write a pipeline out to string.
+   * @param pipe
+   * @param outfile
+   * @return
+   */
+  def makePdf(pipe: Pipeline[_,_], outfile: String) = {
+    io.File(s"$outfile.dot").writeAll(pipe.toDOTString)
+    s"dot -Tpdf -o${outfile}.pdf $outfile.dot" !
   }
 
   /**
@@ -113,14 +125,36 @@ object OptimizerEvaluator extends Logging {
 
     //Step 3: Optimize.
     logInfo("Optimizing the pipeline.")
-    val optimizedPipe = config.cachingStrategy match {
-      case CachingStrategy.All => PipelineOptimizer.makeCachedPipeline(cFitPipe, (0 until cFitPipe.nodes.length).toSet)
-      case CachingStrategy.EstOnly => cFitPipe
+    val estNodes = cFitPipe.nodes.zipWithIndex.filter { _._1 match {
+      case e: EstimatorNode => true
+      case _ => false
+    }}.map(_._2).toSet
+
+    val (optimizedPipe, caches) = config.cachingStrategy match {
+      case CachingStrategy.All => {
+        val caches = (0 until cFitPipe.nodes.length).toSet
+        (PipelineOptimizer.makeCachedPipeline(cFitPipe, caches), caches)
+      }
+      case CachingStrategy.EstOnly => {
+        (cFitPipe, estNodes)
+      }
       case CachingStrategy.Greedy => GreedyOptimizer.greedyOptimizer(
         cFitPipe,
-        (config.memSizeMb.toLong*1024*1024),
-        newProfile)._1
+        (config.memSizeMb.toLong*1024*1024*config.numWorkers), //This parameter is total *cluster* memory in bytes.
+        newProfile)
     }
+
+    //Write optimized pipe out to file.
+    makePdf(optimizedPipe, s"${config.pdfDir}/${config.pipeline.toString}")
+
+    val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
+      cFitPipe,
+      caches union estNodes,
+      testData,
+      Some(newProfile)
+    )
+
+    logInfo(s"Predicted runtime: $estimatedTime")
 
     //Step 4: Run and time.
     logInfo("Beginning the actual pipeline execution.")
@@ -136,7 +170,7 @@ object OptimizerEvaluator extends Logging {
     config.pipeline match {
       case TestPipeline.Amazon => {
         val data = AmazonReviewsDataLoader(sc, config.trainLocation, 3.5)
-        val pipeGetter = WorkflowUtils.getNewsgroupsPipeline(_ : RDD[(Int, String)])
+        val pipeGetter = WorkflowUtils.getAmazonPipeline(_ : RDD[(Int, String)])
 
         profileOptimizeAndTime(pipeGetter, data.labeledData, data.data, config)
       }
@@ -150,14 +184,14 @@ object OptimizerEvaluator extends Logging {
           config.trainLabels,
           config.numPartitions)
 
-        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig(numCosines=4))
+        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig(numCosines=16, numEpochs=1))
 
         profileOptimizeAndTime(pipeGetter, data.train.labeledData, data.test.data, config)
       }
 
       case TestPipeline.ImageNet => {
         val data = ImageNetLoader(sc, config.trainLocation, config.trainLabels)
-        val pipeGetter = WorkflowUtils.getImnetPipeline(_: RDD[LabeledImage], ImageNetSiftLcsFVConfig())
+        val pipeGetter = WorkflowUtils.getImnetPipeline(_: RDD[LabeledImage], ImageNetSiftLcsFVConfig(vocabSize = 64, numPcaSamples=1e6.toInt, numGmmSamples=1e6.toInt))
 
         profileOptimizeAndTime(pipeGetter, data, data.map(_.image), config)
       }
@@ -166,7 +200,7 @@ object OptimizerEvaluator extends Logging {
         val data = VOCLoader(
           sc,
           VOCDataPath(config.trainLocation, "VOCdevkit/VOC2007/JPEGImages/", Some(config.numPartitions)),
-          VOCLabelPath(config.trainLabels)).repartition(2)
+          VOCLabelPath(config.trainLabels))
 
         val pipeGetter = WorkflowUtils.getVocPipeline(_ : RDD[MultiLabeledImage], SIFTFisherConfig(numPcaSamples = 10000, numGmmSamples = 10000))
 
@@ -195,9 +229,12 @@ object OptimizerEvaluator extends Logging {
     testLocation: String = "",
     testLabels: String = "",
     profilesDir: String = "profiles",
+    pdfDir: String = "",
     memSizeMb: Int = 0,
+    memSize: String = "",
     sampleSizes: Array[Int] = Array(1, 2),
     numPartitions: Int = 10,
+    numWorkers: Int = 32,
     seed: Long = 0,
     pipeline: TestPipeline.Value = TestPipeline.Amazon,
     cachingStrategy: CachingStrategy.Value = CachingStrategy.Greedy)
@@ -210,7 +247,9 @@ object OptimizerEvaluator extends Logging {
     opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
     opt[String]("testLabels") required() action { (x,c) => c.copy(testLabels=x) }
     opt[String]("profilesDir") action { (x,c) => c.copy(profilesDir=x) }
-    opt[String]("memSize") required() action { (x,c) => c.copy(memSizeMb=memoryStringToMb(x)) }
+    opt[String]("pdfDir") required() action { (x,c) => c.copy(pdfDir=x) }
+    opt[String]("memSize") required() action { (x,c) => c.copy(memSize=x, memSizeMb=memoryStringToMb(x)) }
+    opt[Int]("numWorkers") required() action { (x,c) => c.copy(numWorkers=x) }
     opt("testPipeline")(scopt.Read.reads(TestPipeline withName _)) required() action { (x,c) => c.copy(pipeline = x)}
     opt("cachingStrategy")(scopt.Read.reads(CachingStrategy withName _)) action { (x,c) => c.copy(cachingStrategy = x)}
     opt[String]("sampleSizes") action { (x,c) => c.copy(sampleSizes=x.split(",").map(_.toInt)) }
@@ -225,11 +264,11 @@ object OptimizerEvaluator extends Logging {
   def main(args: Array[String]) = {
     val appConfig = parse(args)
 
-    val conf = new SparkConf().setAppName(appName)
+    val conf = new SparkConf().setAppName(appName).set("spark.executor.memory", appConfig.memSize)
     conf.setIfMissing("spark.master", "local[2]")
     val sc = new SparkContext(conf)
+
     run(sc, appConfig)
 
-    sc.stop()
   }
 }

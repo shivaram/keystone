@@ -75,7 +75,7 @@ object PipelineRuntimeEstimator extends Logging {
 
 
   //Todo, this horren
-  def estimateNode[A,B](pipe: ConcretePipeline[A,B], node: Int, sample: RDD[A], dataDepsMap: Option[Map[Int,RDD[A]]] = None, fitDepsMap: Option[Map[Int,TransformerNode[_]]] = None): Profile = {
+  def estimateNode[A,B](pipe: ConcretePipeline[A,B], node: Int, sample: RDD[A], dataDepsMap: Option[Map[Int,RDD[_]]] = None, fitDepsMap: Option[Map[Int,TransformerNode[_]]] = None): Profile = {
 
     //Make sure all data dependencies are evaluated
     val dataDeps = pipe.dataDeps(node)
@@ -232,17 +232,37 @@ object PipelineRuntimeEstimator extends Logging {
   }
 
   def estimateNodes[A,_](x: ConcretePipeline[A,_], data: RDD[A]): Map[Int,Profile] = {
-    //TODO: Make this a recursive thing that is smart about caching.
-    //Essentially estimateNode(pipe, id, profiles: Map[Id,Profile], intermediate_res: Map[Id,Result]
-    //Then we proceed recursively, iteratively building up what we need to.
-    //for p in parents
-    //if p not in intermediate_res
-    // (intermediate_res, profiles) = estimateNode(pipe, p, profiles, intermediate_res)
-    //Now that we have intermediate res, calculate current node given these.
-    //Need to look at executor to figure this out.
+    //TODO: Make this smarter so that the sampling process doesn't take so long. Here's a sketch but it doesn't correctly work with the internals of the concretePipeline.
+    /*
+    val edges = x.dataDeps.zip(x.fitDeps).zipWithIndex.flatMap {
+      case ((a,b),i) => (a ++ b).map(n => (n,i))
+    }
 
-    //Alternatively - topologically sort the dag and execute in order, then you won't have anything missing.
+    val sortedNodes = tsort(edges).toSeq.filter(_ >= 0)
 
+    var ests = mutable.Map[Int,Profile]()
+    var ddeps = mutable.Map[Int, RDD[_]](-1 -> data)
+    var fitdeps = mutable.Map[Int, TransformerNode[_]]()
+
+    logInfo(s"Sorted nodes: $sortedNodes")
+
+    //TODO: Figure out how data/fit deps need to be organized here. The po
+    for (n <- sortedNodes) {
+      logInfo(s"${x.nodes(n)}")
+      logInfo(s"Datadeps: $ddeps, fitdeps: $fitdeps")
+      x.nodes(n) match {
+        case e: EstimatorNode => fitdeps(n) = x.fitEstimator(n)
+        case t: TransformerNode[_] => ddeps(n) = x.rddDataEval(n, data)
+        case d: DataNode => ddeps(n) = d.rdd
+      }
+
+      ests(n) = estimateNode(x, n, data, Some(ddeps.toMap), Some(fitdeps.toMap))
+    }
+
+    ests.toMap
+    */
+
+    //OldCode
     x.nodes.indices.map(i => {
       //logInfo(s"Estimating ${x.nodes(i)}")
       (i, estimateNode(x, i, data))}).toMap
