@@ -108,8 +108,8 @@ object PipelineRuntimeEstimator extends Logging {
         val duration = System.nanoTime() - start
 
         //This is ripped from RDD.toDebugString()
-        logInfo(res.toDebugString)
-        logInfo(sample.context.getRDDStorageInfo.mkString("\n"))
+        logDebug(res.toDebugString)
+        logDebug(sample.context.getRDDStorageInfo.mkString("\n"))
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
         res.unpersist()
 
@@ -132,7 +132,7 @@ object PipelineRuntimeEstimator extends Logging {
         res.count()
         val duration = System.nanoTime() - start
 
-        logInfo(res.toDebugString)
+        logDebug(res.toDebugString)
 
         val memSize = sample.context.getRDDStorageInfo.filter(_.id == res.id).map(_.memSize).head
         res.unpersist()
@@ -268,9 +268,13 @@ object PipelineRuntimeEstimator extends Logging {
 
       //Pack a data matrix with observations
       val X = DenseMatrix.ones[Double](observations.length, 2)
-      observations.zipWithIndex.foreach(o => X(o._2, 0) = o._1._4.toDouble)
+      observations.zipWithIndex.foreach(o => X(o._2, 0) = o._1._1.toDouble)
       val y = DenseVector(observations.map(_._4.toDouble))
-      val model = X \ y
+      logInfo(s"X: $X")
+      logInfo(s"y: $y")
+      val model = max(X \ y, 0.0)
+      logInfo(s"Model for ${observations(0)._2}, ${observations(0)._3}: $model")
+      //val model = try { X \ y } catch { case e: MatrixSingularException =>  DenseVector(0.0, 1.0) }
 
       //A function to apply the model.
       def res(x: Double): Double = DenseVector(x, 1.0).t * model

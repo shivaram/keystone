@@ -67,7 +67,7 @@ object OptimizerEvaluator extends Logging {
     //Create directory if it doesn't exist.
     if (Files.notExists(Paths.get(profilesDir))) Files.createDirectory(Paths.get(profilesDir))
 
-    val fileName = s"$profilesDir/pipeName$scale.json"
+    val fileName = s"$profilesDir/$pipeName$scale.json"
 
 
     val profiles = if(Files.exists(Paths.get(fileName))) {
@@ -105,7 +105,11 @@ object OptimizerEvaluator extends Logging {
 
     //Step 2: Generalize from the samples.
     logInfo("Generalizing from the samples.")
-    val newProfile = PipelineRuntimeEstimator.generalizeProfiles(1.0, profiles)
+    val newScale = trainData.count()/trainData.partitions.length
+    val newProfile = PipelineRuntimeEstimator.generalizeProfiles(newScale, profiles)
+
+    logInfo("New profiles:")
+    cFitPipe.nodes.zipWithIndex.foreach { case (n, i) => logInfo(s"$n\t${newProfile(i)}")}
 
     //Step 3: Optimize.
     logInfo("Optimizing the pipeline.")
@@ -114,7 +118,7 @@ object OptimizerEvaluator extends Logging {
       case CachingStrategy.EstOnly => cFitPipe
       case CachingStrategy.Greedy => GreedyOptimizer.greedyOptimizer(
         cFitPipe,
-        (config.memSizeMb*1024*1024).toLong,
+        (config.memSizeMb.toLong*1024*1024),
         newProfile)._1
     }
 
@@ -125,6 +129,7 @@ object OptimizerEvaluator extends Logging {
     val count = piperes.count()
     val pipeTime = System.nanoTime() - pipeStart
     logInfo("Finished pipeline execution.")
+    logInfo(s"Total runtime: $pipeTime")
   }
 
   def run(sc: SparkContext, config: OptimizerEvaluatorConfig) = {
@@ -145,7 +150,7 @@ object OptimizerEvaluator extends Logging {
           config.trainLabels,
           config.numPartitions)
 
-        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig())
+        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig(numCosines=4))
 
         profileOptimizeAndTime(pipeGetter, data.train.labeledData, data.test.data, config)
       }
@@ -161,9 +166,9 @@ object OptimizerEvaluator extends Logging {
         val data = VOCLoader(
           sc,
           VOCDataPath(config.trainLocation, "VOCdevkit/VOC2007/JPEGImages/", Some(config.numPartitions)),
-          VOCLabelPath(config.trainLabels))
+          VOCLabelPath(config.trainLabels)).repartition(2)
 
-        val pipeGetter = WorkflowUtils.getVocPipeline(_ : RDD[MultiLabeledImage], SIFTFisherConfig())
+        val pipeGetter = WorkflowUtils.getVocPipeline(_ : RDD[MultiLabeledImage], SIFTFisherConfig(numPcaSamples = 10000, numGmmSamples = 10000))
 
         profileOptimizeAndTime(pipeGetter, data, data.map(_.image), config)
       }
