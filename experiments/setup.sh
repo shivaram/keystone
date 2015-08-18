@@ -1,8 +1,8 @@
 #!/bin/bash
 
-git clone --single-branch --branch dag-estimation https://github.com/etrain/keystone.git /mnt/keystone
+git clone --single-branch --branch dag-estimation https://github.com/etrain/keystone.git /mnt2/keystone
 
-pushd /mnt/imagenet-keystone > /dev/null
+pushd /mnt2/imagenet-keystone > /dev/null
 cp ~/keystone/sbt/sbt sbt/.
 make
 sbt/sbt assembly
