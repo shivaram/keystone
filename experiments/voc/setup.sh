@@ -5,6 +5,6 @@ HADOOP=/root/mapreduce/bin/hadoop
 /root/ephemeral-hdfs/sbin/start-all.sh
 
 #Copy to HDFS
-$HADOOP distcp s3n://voc-data/VOCtrainval_06-Nov-2007.tar /voc/
-$HADOOP distcp s3n://voc-data/VOCtest_06-Nov-2007.tar /voc/
+$HADOOP distcp s3n://voc-data/VOCtrainval_06-Nov-2007.tar /voc-train
+$HADOOP distcp s3n://voc-data/VOCtest_06-Nov-2007.tar /voc-test
 

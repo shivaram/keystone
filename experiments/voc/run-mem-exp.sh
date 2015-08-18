@@ -8,8 +8,8 @@ NUM_WORKERS=`cat /root/spark/conf/slaves | wc -l`
 NUM_CORES=$(( `cat /proc/cpuinfo | grep processor | wc -l` / 2 ))
 NUM_PARTITIONS=$(( $NUM_WORKERS * $NUM_CORES ))
 
-TRAIN_DIR=/voc/VOCtrainval_06-Nov-2007.tar
-TEST_DIR=/voc/VOCtest_06-Nov-2007.tar
+TRAIN_DIR=/voc-train
+TEST_DIR=/voc-test
 LABEL_PATH=/root/keystone/src/test/resources/images/voclabels.csv
 
 EXP=VOC
