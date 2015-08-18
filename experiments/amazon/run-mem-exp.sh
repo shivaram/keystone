@@ -4,7 +4,7 @@ LOGDIR=/mnt/log
 PROF_DIR=/mnt/profiles
 PDF_DIR=/mnt/pdfs
 DATE=`date "+%Y%m%d.%H%M%S"`
-NUM_WORKERS=`wc -l /root/spark/conf/slaves`
+NUM_WORKERS=`cat /root/spark/conf/slaves | wc -l`
 NUM_CORES=$(( `cat /proc/cpuinfo | grep processor | wc -l` / 2 ))
 NUM_PARTITIONS=$(( $NUM_WORKERS * $NUM_CORES ))
 
