@@ -8,9 +8,9 @@ make
 sbt/sbt assembly
 ~/spark-ec2/copy-dir /mnt/keystone
 
-mkdir -p /mnt/log
-mkdir -p /mnt/pipelines
-mkdir -p /mnt/profiles
+mkdir -p /mnt2/log
+mkdir -p /mnt2/pdfs
+mkdir -p /mnt2/profiles
 
 cd experiments
 bash amazon/setup.sh

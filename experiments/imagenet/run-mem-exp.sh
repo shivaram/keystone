@@ -1,8 +1,8 @@
 #!/bin/bash
 
-LOGDIR=/mnt/log
-PROF_DIR=/mnt/profiles
-PDF_DIR=/mnt/pdfs
+LOGDIR=/mnt2/log
+PROF_DIR=/mnt2/profiles
+PDF_DIR=/mnt2/pdfs
 DATE=`date "+%Y%m%d.%H%M%S"`
 NUM_WORKERS=`cat /root/spark/conf/slaves | wc -l`
 NUM_CORES=$(( `cat /proc/cpuinfo | grep processor | wc -l` / 2 ))
