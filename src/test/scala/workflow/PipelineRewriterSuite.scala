@@ -31,21 +31,42 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     new ConcretePipeline(pipe.nodes, pipe.dataDeps, pipe.fitDeps, pipe.sink)
   }
 
-  def getPredictorPipeline(sc: SparkContext) = {
+  /*def getPredictorPipeline(sc: SparkContext) = {
     val data = sc.parallelize(Array("this is", "some there", "some text that"))
     val labels = sc.parallelize(Array(0, 1, 1))
 
     val pipe = WorkflowUtils.getNewsgroupsPipeline(LabeledData(labels.zip(data)))
 
     (pipe, data)
-  }
+  }*/
 
   def makePdf(pipe: Pipeline[_,_], outfile: String) = {
     io.File(s"$outfile.dot").writeAll(pipe.toDOTString)
     s"dot -Tpdf -o${outfile}.pdf $outfile.dot" !
   }
 
-  test("Adding caching to pipeline.") {
+  test("Getting and fitting the VOC pipe") {
+    sc = new SparkContext("local", "test")
+
+    val vocSamplePath = VOCDataPath(
+      TestUtils.getTestResourceFileName("images/vocdata.tar"),
+      "VOCdevkit/VOC2007/JPEGImages/", Some(1)
+    )
+    val vocSampleLabelPath = VOCLabelPath(TestUtils.getTestResourceFileName("images/voclabels.csv"))
+
+    val prop = 0.05
+    val data = VOCLoader(sc, vocSamplePath, vocSampleLabelPath).sample(false, prop, 42).repartition(2).cache()
+    logInfo(s"Data is size ${data.count}")
+
+    val pipe = WorkflowUtils.getVocPipeline(data)
+
+    makePdf(pipe, "basicVoc")
+    val fitPipe = Optimizer.execute(pipe)
+    val cFitPipe = makeConcrete(fitPipe)
+    makePdf(cFitPipe, "commonSubVoc")
+  }
+
+  /*test("Adding caching to pipeline.") {
     sc = new SparkContext("local", "test")
 
     val (predictorPipeline, data) = getPredictorPipeline(sc)
@@ -62,7 +83,7 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
 
     log.info(s"new debug string: ${newPipe.toDOTString}")
     makePdf(newPipe, "newPipe")
-  }
+  }*/
 
   /*test("Estimating a transformer") {
     sc = new SparkContext("local", "test")
@@ -314,7 +335,7 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     }
   }*/
 
-  def estimateAndOptimize[A](data: RDD[A], pipe: Pipeline[A,_], basename: String, prop: Double) = {
+  /*def estimateAndOptimize[A](data: RDD[A], pipe: Pipeline[A,_], basename: String, prop: Double) = {
     log.info(s"DOT String: ${pipe.toDOTString}")
     val fitPipe = Optimizer.execute(pipe)
 
@@ -386,7 +407,7 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
 
     log.info(s"EVERYTHING Actual time: $allActualTime, Estimated time: $allEstimatedTime")
     log.info(s"EVERYTHING Relative: ${relativeTime(allActualTime,allEstimatedTime)}")
-  }
+  }*/
 
   /*test("Optimizing ImageNet pipeline.") {
     sc = new SparkContext("local", "test")
@@ -403,7 +424,7 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     estimateAndOptimize(data.map(_.image), pipe, "imnet", prop)
   }*/
 
-  test("Optimizing TIMIT pipeline.") {
+  /*test("Optimizing TIMIT pipeline.") {
     sc = new SparkContext("local", "test")
 
     val trainFile = TestUtils.getTestResourceFileName("speech/timit/timitData200.csv")
@@ -417,6 +438,6 @@ class PipelineRewriterSuite extends FunSuite with LocalSparkContext with Logging
     val pipe = WorkflowUtils.getTimitPipeline(data, conf)
 
     estimateAndOptimize(data.data, pipe, "timit", prop)
-  }
+  }*/
 
 }

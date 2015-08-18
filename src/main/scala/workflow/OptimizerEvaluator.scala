@@ -145,7 +145,7 @@ object OptimizerEvaluator extends Logging {
     }
 
     //Write optimized pipe out to file.
-    makePdf(optimizedPipe, s"${config.pdfDir}/${config.pipeline.toString}")
+    makePdf(optimizedPipe, s"${config.pdfDir}/${config.pipeline.toString}.${config.memSize}.${config.cachingStrategy}")
 
     val estimatedTime = PipelineRuntimeEstimator.estimateCachedRunTime(
       cFitPipe,
