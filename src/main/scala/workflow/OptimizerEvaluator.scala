@@ -200,7 +200,7 @@ object OptimizerEvaluator extends Logging {
         val data = VOCLoader(
           sc,
           VOCDataPath(config.trainLocation, "VOCdevkit/VOC2007/JPEGImages/", Some(config.numPartitions)),
-          VOCLabelPath(config.trainLabels))
+          VOCLabelPath(config.trainLabels)).repartition(config.numPartitions)
 
         val pipeGetter = WorkflowUtils.getVocPipeline(_ : RDD[MultiLabeledImage], SIFTFisherConfig(numPcaSamples = 10000, numGmmSamples = 10000))
 
