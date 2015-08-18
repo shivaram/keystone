@@ -270,5 +270,7 @@ object OptimizerEvaluator extends Logging {
 
     run(sc, appConfig)
 
+    sc.stop()
+
   }
 }
