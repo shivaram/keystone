@@ -12,7 +12,9 @@ mkdir -p /mnt/log
 mkdir -p /mnt/pipelines
 mkdir -p /mnt/profiles
 
+cd experiments
 bash amazon/setup.sh
 bash imagenet/setup.sh
 bash timit/setup.sh
 bash voc/setup.sh
+cd -

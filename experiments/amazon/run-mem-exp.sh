@@ -32,6 +32,6 @@ do
       --cachingStrategy $STRAT \
       --profilesDir $PROF_DIR \
       --pdfDir $PDF_DIR \
-      --sampleSizes 2,4 >$LOGFILE 2&>1
+      --sampleSizes 2,4 >$LOGFILE 2>&1
   done
 done
