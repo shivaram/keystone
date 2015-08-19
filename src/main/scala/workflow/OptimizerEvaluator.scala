@@ -130,6 +130,9 @@ object OptimizerEvaluator extends Logging {
       case _ => false
     }}.map(_._2).toSet
 
+    val clusterMemoryBytes = testData.context.getExecutorMemoryStatus.values.map(_._1).sum
+    logInfo(s"Cluster has ${clusterMemoryBytes/(1024*1024*1024)} GB free for caching.")
+
     val (optimizedPipe, caches) = config.cachingStrategy match {
       case CachingStrategy.All => {
         val caches = (0 until cFitPipe.nodes.length).toSet
@@ -140,7 +143,7 @@ object OptimizerEvaluator extends Logging {
       }
       case CachingStrategy.Greedy => GreedyOptimizer.greedyOptimizer(
         cFitPipe,
-        (config.memSizeMb.toLong*1024*1024*config.numWorkers), //This parameter is total *cluster* memory in bytes.
+        clusterMemoryBytes, //This parameter is total *cluster* memory in bytes.
         newProfile)
     }
 
