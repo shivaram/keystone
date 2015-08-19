@@ -187,7 +187,7 @@ object OptimizerEvaluator extends Logging {
           config.trainLabels,
           config.numPartitions)
 
-        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig(numCosines=16, numEpochs=1))
+        val pipeGetter = WorkflowUtils.getTimitPipeline(_ : RDD[(Int, DenseVector[Double])], TimitConfig(numCosines=4, numEpochs=1))
 
         profileOptimizeAndTime(pipeGetter, data.train.labeledData, data.test.data, config)
       }
