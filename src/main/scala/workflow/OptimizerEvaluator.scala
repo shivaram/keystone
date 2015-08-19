@@ -267,7 +267,8 @@ object OptimizerEvaluator extends Logging {
   def main(args: Array[String]) = {
     val appConfig = parse(args)
 
-    val conf = new SparkConf().setAppName(appName)
+    val conf = new SparkConf()
+      .setAppName(s"$appName.${appConfig.memSize}.${appConfig.cachingStrategy}.${appConfig.pipeline}")
       .set("spark.executor.memory", appConfig.memSize)
       .setIfMissing("spark.master", "local[2]")
       .remove("spark.jars")
