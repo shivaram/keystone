@@ -267,8 +267,10 @@ object OptimizerEvaluator extends Logging {
   def main(args: Array[String]) = {
     val appConfig = parse(args)
 
-    val conf = new SparkConf().setAppName(appName).set("spark.executor.memory", appConfig.memSize)
-    conf.setIfMissing("spark.master", "local[2]")
+    val conf = new SparkConf().setAppName(appName)
+      .set("spark.executor.memory", appConfig.memSize)
+      .setIfMissing("spark.master", "local[2]")
+      .remove("spark.jars")
     val sc = new SparkContext(conf)
 
     run(sc, appConfig)
