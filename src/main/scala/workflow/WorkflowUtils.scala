@@ -37,7 +37,7 @@ object WorkflowUtils {
     // Part 2: Compute dimensionality-reduced PCA features.
     val pcaFeaturizer = {
         val pca = siftExtractor andThen
-          ColumnSampler(10000 / numTrainingImages) andThen
+          ColumnSampler(conf.numPcaSamples / numTrainingImages) andThen
           (ColumnPCAEstimator(conf.descDim), trainingData)
 
         siftExtractor andThen pca.fittedTransformer
@@ -47,7 +47,7 @@ object WorkflowUtils {
     // Part 3: Compute Fisher Vectors and signed-square-root normalization.
     val fisherFeaturizer = {
       val fisherVector = pcaFeaturizer andThen
-        ColumnSampler(10000) andThen
+        ColumnSampler(conf.numGmmSamples / numTrainingImages) andThen
         (GMMFisherVectorEstimator(conf.vocabSize), trainingData)
       pcaFeaturizer andThen fisherVector.fittedTransformer
       } andThen
