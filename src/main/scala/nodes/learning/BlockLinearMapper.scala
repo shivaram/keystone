@@ -23,9 +23,7 @@ class BlockLinearMapper(
     val blockSize: Int,
     val bOpt: Option[DenseVector[Double]] = None,
     val featureScalersOpt: Option[Seq[Transformer[DenseVector[Double], DenseVector[Double]]]] = None)
-  extends Transformer[DenseVector[Double], DenseVector[Double]] with WeightedNode {
-
-  def weight = xs.length
+  extends Transformer[DenseVector[Double], DenseVector[Double]] {
 
   // Use identity nodes if we don't need to do scaling
   val featureScalers = featureScalersOpt.getOrElse(
@@ -150,10 +148,7 @@ class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 
   extends LabelEstimator[DenseVector[Double], DenseVector[Double], DenseVector[Double]]
   with WeightedNode {
 
-  def weight = numFeaturesOpt match {
-    case Some(x) => math.ceil(x.toDouble/blockSize).toInt
-    case None => 1
-  }
+  def weight = (3*numIter)+1
 
   /**
    * Fit a model using blocks of features and labels provided.
@@ -184,6 +179,7 @@ class BlockLeastSquaresEstimator(blockSize: Int, numIter: Int, lambda: Double = 
     }
 
     val bcd = new BlockCoordinateDescent()
+
     val models = bcd.solveLeastSquaresWithL2(
       A, b, Array(lambda), numIter, new NormalEquations()).transpose
     new BlockLinearMapper(models.head, blockSize, Some(labelScaler.mean), Some(featureScalers))
