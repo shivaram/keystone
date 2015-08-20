@@ -73,7 +73,7 @@ object WorkflowUtils {
       NGramsFeaturizer(1 to 2) andThen
       TermFrequency(x => 1) andThen
       (CommonSparseFeatures(100000), trainData.map(_._2)) andThen
-      (LogisticRegressionLBFGSEstimator(numIters = 20, cache = true), trainData.map(_._2), trainData.map(_._1))
+      (LogisticRegressionLBFGSEstimator(numIters = 20, cache = false), trainData.map(_._2), trainData.map(_._1))
 
     pipe
   }
