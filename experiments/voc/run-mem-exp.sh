@@ -14,19 +14,22 @@ LABEL_PATH=/root/keystone/src/test/resources/images/voclabels.csv
 
 EXP=VOC
 
+TOTAL_MEM=105g
+
 #Do VOC
-for MEM in 80g 40g 20g 10g 5g 2.5g 1g 500m
+for MEM in 20g 10g 5g 2.5g 1g 500m
 do
   for STRAT in Greedy EstOnly All
   do
     LOGFILE=$LOGDIR/$EXP.$STRAT.$MEM.$DATE.log
     
-    KEYSTONE_MEM=$MEM bash bin/run-pipeline.sh workflow.OptimizerEvaluator \
+    KEYSTONE_MEM=$TOTAL_MEM bash bin/run-pipeline.sh workflow.OptimizerEvaluator \
       --trainLocation $TRAIN_DIR \
       --trainLabels $LABEL_PATH \
       --testLocation $TEST_DIR \
       --testLabels $LABEL_PATH \
       --memSize $MEM \
+      --totalMemSize $TOTAL_MEM \
       --testPipeline $EXP \
       --numPartitions $NUM_PARTITIONS \
       --numWorkers $NUM_WORKERS \

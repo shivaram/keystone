@@ -235,6 +235,8 @@ object OptimizerEvaluator extends Logging {
     pdfDir: String = "",
     memSizeMb: Int = 0,
     memSize: String = "",
+    totalMemSizeMb: Int = 0,
+    totalMemSize: String = "",
     sampleSizes: Array[Int] = Array(1, 2),
     numPartitions: Int = 10,
     numWorkers: Int = 32,
@@ -252,6 +254,7 @@ object OptimizerEvaluator extends Logging {
     opt[String]("profilesDir") action { (x,c) => c.copy(profilesDir=x) }
     opt[String]("pdfDir") required() action { (x,c) => c.copy(pdfDir=x) }
     opt[String]("memSize") required() action { (x,c) => c.copy(memSize=x, memSizeMb=memoryStringToMb(x)) }
+    opt[String]("totalMemSize") required() action { (x,c) => c.copy(totalMemSize=x, totalMemSizeMb=memoryStringToMb(x)) }
     opt[Int]("numWorkers") required() action { (x,c) => c.copy(numWorkers=x) }
     opt("testPipeline")(scopt.Read.reads(TestPipeline withName _)) required() action { (x,c) => c.copy(pipeline = x)}
     opt("cachingStrategy")(scopt.Read.reads(CachingStrategy withName _)) action { (x,c) => c.copy(cachingStrategy = x)}
@@ -267,11 +270,17 @@ object OptimizerEvaluator extends Logging {
   def main(args: Array[String]) = {
     val appConfig = parse(args)
 
+    // Compute cache fraction based on memSize and totalMemSize
+    val cacheFraction = appConfig.memSizeMb.toDouble / appConfig.totalMemSizeMb
+
     val conf = new SparkConf()
       .setAppName(s"$appName.${appConfig.memSize}.${appConfig.cachingStrategy}.${appConfig.pipeline}")
-      .set("spark.executor.memory", appConfig.memSize)
+      .set("spark.storage.safetyFraction", "1.0")
+      .set("spark.executor.memory", appConfig.totalMemSize)
+      .set("spark.storage.memoryFraction", "%f".format(cacheFraction))
       .setIfMissing("spark.master", "local[2]")
       .remove("spark.jars")
+    //.set("spark.executor.memory", appConfig.memSize)
     val sc = new SparkContext(conf)
 
     run(sc, appConfig)
