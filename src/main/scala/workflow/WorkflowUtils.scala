@@ -67,13 +67,16 @@ object WorkflowUtils {
   }
 
   def getAmazonPipeline(trainData: RDD[(Int, String)]) = {
+    val trainingData = trainData.map(_._2)
+    val trainingLabels = trainData.map(_._1)
+
     val pipe = Trim andThen
       LowerCase() andThen
       Tokenizer() andThen
       NGramsFeaturizer(1 to 2) andThen
       TermFrequency(x => 1) andThen
-      (CommonSparseFeatures(100000), trainData.map(_._2)) andThen
-      (LogisticRegressionLBFGSEstimator(numIters = 20, cache = false), trainData.map(_._2), trainData.map(_._1))
+      (CommonSparseFeatures(100000), trainingData) andThen
+      (LogisticRegressionLBFGSEstimator(numIters = 20, cache = false), trainingData, trainingLabels)
 
     pipe
   }
