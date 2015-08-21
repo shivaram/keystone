@@ -18,13 +18,7 @@ object GodMode {
     def godMode = new Object with Dynamic {
       def applyDynamic(fieldName: String)(args: Any*): Long = {
 
-        val method = a.getClass.getDeclaredMethod(fieldName,
-          classOf[Int],
-          classOf[Boolean],
-          classOf[Double],
-          classOf[Int],
-          classOf[Double],
-          classOf[String])
+        val method = a.getClass.getDeclaredMethod(fieldName, classOf[Boolean])
         method.setAccessible(true)
         val preparedArgs = args.map(_.asInstanceOf[Object])
 
