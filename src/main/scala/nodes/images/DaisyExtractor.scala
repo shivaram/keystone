@@ -187,7 +187,7 @@ class DaisyExtractor(
       }
       x += 1
     }
-    out
+    out.t
   }
 
   def normalize(x: DenseVector[Double]): DenseVector[Double] = {
