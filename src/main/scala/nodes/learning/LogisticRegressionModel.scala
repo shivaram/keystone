@@ -33,8 +33,12 @@ case class LogisticRegressionLBFGSEstimator[T <: Vector[Double] : ClassTag](numC
     val labeledPoints = labels.zip(in).map(x => LabeledPoint(x._1, breezeVectorToMLlib(x._2)))
     val trainer = new LogisticRegressionWithLBFGS().setNumClasses(numClasses)
 
-    import utils.GodMode._
-    trainer.godMode.setFeatureScaling(false)
+    // Disable feature scaling using reflection
+    val featureScalingMethod = trainer.getClass.getSuperclass.getDeclaredMethod("setFeatureScaling",
+      classOf[Boolean])
+    featureScalingMethod.setAccessible(true)
+    featureScalingMethod.invoke(trainer, new java.lang.Boolean(false))
+
     trainer.setValidateData(false).optimizer.setConvergenceTol(convergenceTol).setNumIterations(numIters)
     val model = if (cache) {
       trainer.run(labeledPoints.cache())
