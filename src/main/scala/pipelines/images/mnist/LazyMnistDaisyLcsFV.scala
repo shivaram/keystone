@@ -15,7 +15,7 @@ import evaluation.MulticlassClassifierEvaluator
 import loaders.MnistLoader
 import pipelines.Logging
 
-import nodes.images.external.FisherVector
+import nodes.images.external.{FisherVector, SIFTExtractor}
 import nodes.images._
 import nodes.learning._
 import nodes.stats.{ColumnSampler, NormalizeRows, SignedHellingerMapper, BatchSignedHellingerMapper}
@@ -23,6 +23,10 @@ import nodes.util.{FloatToDouble, MatrixVectorizer, Cacher}
 import nodes.util.{ClassLabelIndicatorsFromIntLabels, ZipVectors, TopKClassifier}
 
 import utils.{Image, MatrixUtils, Stats}
+
+import org.apache.log4j.Logger
+import org.apache.log4j.Level
+
 
 object LazyMnistDaisyLcsFV extends Serializable with Logging {
   val appName = "LazyMnistDaisyLcsFV"
@@ -64,93 +68,46 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
       conf: LazyMnistDaisyLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Float]]], Iterator[RDD[DenseVector[Float]]]) = {
+    : (RDD[DenseVector[Double]], RDD[DenseVector[Double]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
     val grayRDD = grayscaler(trainParsed)
-    val grayRDDTest = grayscaler(testParsed)
 
     val numImgs = trainParsed.count.toInt
-    var daisySamples: Option[RDD[DenseVector[Float]]] = None
-    val daisyHellinger = (new DaisyExtractor(4, 2, 2, 2, 2, 4, 8) then
+
+    val siftHellinger = (new SIFTExtractor(1) then
       BatchSignedHellingerMapper)
 
-    val featurizer = Scaler(0.5) then daisyHellinger
-    val trainingFeatures = List(featurizer(grayRDD).map(_.toDenseVector)).iterator
-    val testFeatures = List(featurizer(grayRDDTest).map(_.toDenseVector)).iterator
-
-    val featurizerScaled = Scaler(0.5) then daisyHellinger
-    val trainingFeaturesScaled = List(featurizerScaled(grayRDD).map(_.toDenseVector)).iterator
-    val testFeaturesScaled = List(featurizerScaled(grayRDDTest).map(_.toDenseVector)).iterator
-
-    (trainingFeatures ++ trainingFeaturesScaled, testFeatures ++ testFeaturesScaled)
-  }
-
-  def getLcsFeatures(
-      conf: LazyMnistDaisyLcsFVConfig,
-      trainParsed: RDD[Image],
-      testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
-
-    val numImgs = trainParsed.count.toInt
-    var lcsSamples: Option[RDD[DenseVector[Float]]] = None
-    // Part 1a: If necessary, perform PCA on samples of the LCS features, or load a PCA matrix from
+    // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
-    val pcaTransformer = conf.lcsPcaFile match {
-      case Some(fname) => new BatchPCATransformer(convert(csvread(new File(fname)), Float).t)
-      case None => {
-        val pcapipe = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
-        lcsSamples = Some(
-          new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(
-            pcapipe(trainParsed)).cache().setName("lcs-samples"))
-        val pca = new PCAEstimator(conf.descDim).fit(lcsSamples.get)
+    val samplerPCA = new ColumnSampler(conf.numPcaSamples)
+    val siftSamples = samplerPCA(siftHellinger(grayRDD)).setName("sift-samples")
+    val samps = siftSamples.collect.map(_.toArray)
+    println(samps.length)
 
-        new BatchPCATransformer(pca.pcaMat)
-      }
-    }
+    val dataMat: DenseMatrix[Float] = DenseMatrix(samps:_*)
 
-    // Part 2: Compute dimensionality-reduced PCA features.
-    val featurizer =  new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch) then
-      pcaTransformer
-    val pcaTransformedRDD = featurizer(trainParsed)
+       // Part 2: Compute dimensionality-reduced PCA features.
+    val featurizer = siftHellinger
+    val pcaTransformedRDD = featurizer(grayRDD)
 
-    // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load
-    // from disk.
-    val gmm = conf.lcsGmmMeanFile match {
-      case Some(f) =>
-        new GaussianMixtureModel(
-          csvread(new File(conf.lcsGmmMeanFile.get)),
-          csvread(new File(conf.lcsGmmVarFile.get)),
-          csvread(new File(conf.lcsGmmWtsFile.get)).toDenseVector)
-      case None =>
-        val samples = lcsSamples.getOrElse { 
-          val lcs = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
-          new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(lcs(trainParsed))
-        }
-        val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
-        new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(MatrixUtils.shuffleArray(
-            vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
-    }
+    val sampler = new ColumnSampler(conf.numGmmSamples)
+    val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedRDD).map(convert(_, Double))
+    /* Write out samples for debugging */
+    val collectedSamples = MatrixUtils.shuffleArray(samples.collect()).take(100)
+    val gmm = new GaussianMixtureModelEstimator(conf.vocabSize).fit(samples)
+    val fisherFeaturizer = constructFisherFeaturizer(gmm, Some("sift-fisher"))
 
-    val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
-
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
-      fisherFeaturizer(pcaTransformedRDD)
-    }
-
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
-      (featurizer then fisherFeaturizer).apply(testParsed)
-    }
-
-    (trainingFeatures, testFeatures)
+    (fisherFeaturizer(pcaTransformedRDD), (grayscaler then featurizer then fisherFeaturizer).apply(testParsed))
   }
+
 
   def run(sc: SparkContext, conf: LazyMnistDaisyLcsFVConfig) {
-
+    var i = 0;
+    while (true) {
+      i += 1;
+      println("ITERATION NUMBER: " + i)
     // Property of MNIST
     val numClasses = 10
 
@@ -167,26 +124,26 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
 
     val testingLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(testParsedRDD.map(_.label))
 
-    val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
+    val trainParsedImgs = (ImageExtractor).apply(parsedRDD)
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
 
     // Get Daisy + FV features
     val (trainDaisy, testDaisy) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs)
-    // Get Daisy + FV features
-    val (trainDaisyScaled, testDaisyScaled) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs)
-    val trainingFeatures = trainDaisy.map(_.map(_.map(_.toDouble)))
-    val testFeatures = testDaisy.map(_.map(_.map(_.toDouble)))
-    // val trainingFeatures = ZipVectors(Seq(trainDaisy, trainLcs))
-    // val testFeatures = ZipVectors(Seq(testDaisy, testLcs))
+    val trainingFeatures = trainDaisy.collect()
+    val testFeatures = testDaisy.collect()
+    System.gc()
 
+    /*
+    val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt
 
-
-    // We have one block each of LCS and Daisy for centroidBatchSize
+    // NOTE(shivaram): one block only contains `centroidBatchSize` worth of Daisy/LCS features
+    // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
+    val numFeaturesPerBlock = (conf.vocabSize.toDouble * conf.descDim).toInt // 2048 by default
+    println("NUM FEATURES PER BLOCK: " + numFeaturesPerBlock);
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
-      648, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures, trainingLabels, 1)
-
+      numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
+        trainingFeatures, trainingLabels, Some(1))
     val testPredictedValues = model.apply(testFeatures)
 
     val predicted = TopKClassifier(1).apply(testPredictedValues)
@@ -194,6 +151,9 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     val actual = TopKClassifier(1).apply(testingLabels);
 
     logInfo("TEST Error is " + Stats.getErrPercent(predicted, actual, actual.count) + "%")
+    */
+    }
+
   }
 
   case class LazyMnistDaisyLcsFVConfig(
@@ -216,8 +176,8 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     lcsGmmMeanFile: Option[String]= None,
     lcsGmmVarFile: Option[String] = None,
     lcsGmmWtsFile: Option[String] = None,
-    numPcaSamples: Int = 1e7.toInt,
-    numGmmSamples: Int = 1e7.toInt)
+    numPcaSamples: Int = 100,
+    numGmmSamples: Int = 1000);
 
   def parse(args: Array[String]): LazyMnistDaisyLcsFVConfig = {
     new OptionParser[LazyMnistDaisyLcsFVConfig](appName) {
@@ -264,6 +224,8 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
   def main(args: Array[String]) = {
     val appConfig = parse(args)
 
+    Logger.getLogger("org").setLevel(Level.OFF)
+    Logger.getLogger("akka").setLevel(Level.OFF)
     val conf = new SparkConf().setAppName(appName)
     // NOTE: ONLY APPLICABLE IF YOU CAN DONE COPY-DIR
     conf.remove("spark.jars")

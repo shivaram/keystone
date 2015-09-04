@@ -65,17 +65,9 @@ object VOCSIFTPositionalFisher extends Serializable {
     val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load from disk.
-    val gmm = conf.gmmMeanFile match {
-      case Some(f) =>
-        new GaussianMixtureModel(
-          csvread(new File(conf.gmmMeanFile.get)),
-          csvread(new File(conf.gmmVarFile.get)),
-          csvread(new File(conf.gmmWtsFile.get)).toDenseVector)
-      case None =>
-        val sampler = new ColumnSampler(conf.numGmmSamples)
-        new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(sampler(concatenatedTrainRDD).map(convert(_, Double)))
-    }
+    val sampler = new ColumnSampler(conf.numGmmSamples)
+    val gmm = new GaussianMixtureModelEstimator(conf.vocabSize)
+              .fit(sampler(concatenatedTrainRDD).map(convert(_, Double)))
 
     // Part 3: Compute Fisher Vectors and signed-square-root normalization.
     val fisherFeaturizer =  new FisherVector(gmm) then
