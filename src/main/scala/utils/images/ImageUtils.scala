@@ -46,6 +46,17 @@ object ImageUtils extends Logging {
   }
 
   /**
+   * Scale image
+   * @param in Input image.
+   * @param scalePercent perecnt to scale image by
+   */
+  def scaleImage(in: Image, scalePercent: Double): Image = {
+    in
+  }
+
+
+
+  /**
    * Converts an input image to Grayscale according to the NTSC standard weights for RGB images and
    * using sqrt sum of squares for images with other numbers of channels.
    *
