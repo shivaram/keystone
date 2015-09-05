@@ -1,4 +1,4 @@
-package pipelines.images.mnist
+package pipelines.images.imagenet
 
 import java.io.File
 import scala.reflect.ClassTag
@@ -12,7 +12,7 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 
 import evaluation.MulticlassClassifierEvaluator
-import loaders.MnistLoader
+import loaders.ImageNetLoader
 import pipelines.Logging
 
 import nodes.images.external.FisherVector
@@ -24,8 +24,8 @@ import nodes.util.{ClassLabelIndicatorsFromIntLabels, ZipVectors, TopKClassifier
 
 import utils.{Image, MatrixUtils, Stats}
 
-object LazyMnistDaisyLcsFV extends Serializable with Logging {
-  val appName = "LazyMnistDaisyLcsFV"
+object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
+  val appName = "LazyImageNetDaisyLcsFV"
 
   def makeDoubleArrayCsv[T: ClassTag](filenames: RDD[String], data: RDD[Array[T]]): RDD[String] = {
     filenames.zip(data).map { case (x,y) => x + ","+ y.mkString(",") }
@@ -61,34 +61,78 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
   }
 
   def getDaisyFeatures(
-      conf: LazyMnistDaisyLcsFVConfig,
+      conf: LazyImageNetDaisyLcsFVConfig,
       trainParsed: RDD[Image],
-      testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Float]]], Iterator[RDD[DenseVector[Float]]]) = {
+      testParsed: RDD[Image],
+      scale: Double = 1
+      )
+    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
     val grayRDD = grayscaler(trainParsed)
-    val grayRDDTest = grayscaler(testParsed)
 
     val numImgs = trainParsed.count.toInt
     var daisySamples: Option[RDD[DenseVector[Float]]] = None
-    val daisyHellinger = (new DaisyExtractor(4, 2, 2, 2, 2, 4, 8) then
+
+    val daisyHellinger = (new Scaler(scale) then new DaisyExtractor() then
       BatchSignedHellingerMapper)
 
-    val featurizer = Scaler(0.5) then daisyHellinger
-    val trainingFeatures = List(featurizer(grayRDD).map(_.toDenseVector)).iterator
-    val testFeatures = List(featurizer(grayRDDTest).map(_.toDenseVector)).iterator
+    // Part 1a: If necessary, perform PCA on samples of the Daisy features, or load a PCA matrix from
+    // disk.
+    val pcaTransformer = conf.daisyPcaFile match {
+      case Some(fname) => new BatchPCATransformer(convert(csvread(new File(fname)), Float).t)
+      case None => {
+        daisySamples = Some(
+          new ColumnSampler(conf.numPcaSamples,
+            Some(numImgs)).apply(daisyHellinger(grayRDD)).cache().setName("daisy-samples"))
+        val pca = new PCAEstimator(conf.descDim).fit(daisySamples.get)
 
-    val featurizerScaled = Scaler(0.5) then daisyHellinger
-    val trainingFeaturesScaled = List(featurizerScaled(grayRDD).map(_.toDenseVector)).iterator
-    val testFeaturesScaled = List(featurizerScaled(grayRDDTest).map(_.toDenseVector)).iterator
+        new BatchPCATransformer(pca.pcaMat)
+      }
+    }
 
-    (trainingFeatures ++ trainingFeaturesScaled, testFeatures ++ testFeaturesScaled)
+    // Part 2: Compute dimensionality-reduced PCA features.
+    val featurizer = daisyHellinger then pcaTransformer
+    val pcaTransformedRDD = featurizer(grayRDD)
+
+    // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load
+    // from disk.
+    val gmm = conf.daisyGmmMeanFile match {
+      case Some(f) =>
+        new GaussianMixtureModel(
+          csvread(new File(conf.daisyGmmMeanFile.get)),
+          csvread(new File(conf.daisyGmmVarFile.get)),
+          csvread(new File(conf.daisyGmmWtsFile.get)).toDenseVector)
+      case None =>
+        val samples = daisySamples.getOrElse { 
+          new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(daisyHellinger(grayRDD))
+        }
+        val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
+        new GaussianMixtureModelEstimator(conf.vocabSize)
+          .fit(MatrixUtils.shuffleArray(
+            vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
+    }
+
+    val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
+
+    // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
+
+    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("daisy-fisher"))
+      fisherFeaturizer(pcaTransformedRDD)
+    }
+
+    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("daisy-fisher"))
+      (grayscaler then featurizer then fisherFeaturizer).apply(testParsed)
+    }
+
+    (trainingFeatures, testFeatures)
   }
 
   def getLcsFeatures(
-      conf: LazyMnistDaisyLcsFVConfig,
+      conf: LazyImageNetDaisyLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
     : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
@@ -149,56 +193,71 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     (trainingFeatures, testFeatures)
   }
 
-  def run(sc: SparkContext, conf: LazyMnistDaisyLcsFVConfig) {
-
-    // Property of MNIST
-    val numClasses = 10
-
+  def run(sc: SparkContext, conf: LazyImageNetDaisyLcsFVConfig) {
     // Load the data and extract training labels.
-    val parsedRDD = MnistLoader(
+    val parsedRDD = ImageNetLoader(
       sc,
-      conf.trainLocation, 10).cache().setName("trainData")
+      conf.trainLocation,
+      conf.labelPath).cache().setName("trainData")
 
-    val trainingLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(parsedRDD.map(_.label))
+    val filenamesRDD = parsedRDD.map(_.filename.get)
 
-    val testParsedRDD = MnistLoader(
+    val labelGrabber = LabelExtractor then
+      ClassLabelIndicatorsFromIntLabels(ImageNetLoader.NUM_CLASSES) then
+      new Cacher[DenseVector[Double]](Some("labels"))
+    val trainingLabels = labelGrabber(parsedRDD)
+    trainingLabels.count
+
+    // Load test data and get actual labels
+    val testParsedRDD = ImageNetLoader(
       sc,
-      conf.testLocation, 10).cache().setName("testData")
+      conf.testLocation,
+      conf.labelPath).cache().setName("testData")
+    val testActual = (labelGrabber then TopKClassifier(1)).apply(testParsedRDD)
+    val numTestImgs = testActual.count
 
-    val testingLabels = ClassLabelIndicatorsFromIntLabels(numClasses).apply(testParsedRDD.map(_.label))
+    val testFilenamesRDD = testParsedRDD.map(_.filename.get)
 
     val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
 
     // Get Daisy + FV features
     val (trainDaisy, testDaisy) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs)
-    // Get Daisy + FV features
-    val (trainDaisyScaled, testDaisyScaled) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs)
-    val trainingFeatures = trainDaisy.map(_.map(_.map(_.toDouble)))
-    val testFeatures = testDaisy.map(_.map(_.map(_.toDouble)))
+    val (trainDaisyScale, testDaisyScale) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs, 0.5)
+
+    val (trainDaisyScale2, testDaisyScale2) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs, 0.25)
+
+    // Get LCS + FV features
+    val (trainLcs, testLcs) = getLcsFeatures(conf, trainParsedImgs, testParsedImgs)
+
+    val trainingFeatures = trainDaisy ++ trainLcs ++ trainDaisyScale ++ trainDaisyScale2
+    val testFeatures = testDaisy ++ testLcs ++ testDaisyScale ++ testDaisyScale2
     // val trainingFeatures = ZipVectors(Seq(trainDaisy, trainLcs))
     // val testFeatures = ZipVectors(Seq(testDaisy, testLcs))
 
-
+    // trainingFeatures.count
+    // val numTestImgs = testFeatures.count
 
     // We have one block each of LCS and Daisy for centroidBatchSize
+    val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt * 2
+    // NOTE(shivaram): one block only contains `centroidBatchSize` worth of Daisy/LCS features
+    // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
+    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * conf.descDim // 2048 by default
+
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
-      648, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures, trainingLabels, 1)
+      numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
+        trainingFeatures, trainingLabels, numBlocks)
 
     val testPredictedValues = model.apply(testFeatures)
-
-    val predicted = TopKClassifier(1).apply(testPredictedValues)
-
-    val actual = TopKClassifier(1).apply(testingLabels);
-
-    logInfo("TEST Error is " + Stats.getErrPercent(predicted, actual, actual.count) + "%")
+    val predicted = TopKClassifier(5).apply(testPredictedValues)
+    logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
   }
 
-  case class LazyMnistDaisyLcsFVConfig(
+  case class LazyImageNetDaisyLcsFVConfig(
     trainLocation: String = "",
     testLocation: String = "",
+    labelPath: String = "",
     lambda: Double = 6e-5,
     mixtureWeight: Double = 0.25,
     descDim: Int = 64,
@@ -219,12 +278,14 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     numPcaSamples: Int = 1e7.toInt,
     numGmmSamples: Int = 1e7.toInt)
 
-  def parse(args: Array[String]): LazyMnistDaisyLcsFVConfig = {
-    new OptionParser[LazyMnistDaisyLcsFVConfig](appName) {
+  def parse(args: Array[String]): LazyImageNetDaisyLcsFVConfig = {
+    new OptionParser[LazyImageNetDaisyLcsFVConfig](appName) {
       head(appName, "0.1")
       help("help") text("prints this usage text")
       opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
       opt[String]("testLocation") required() action { (x,c) => c.copy(testLocation=x) }
+      opt[String]("labelPath") required() action { (x,c) => c.copy(labelPath=x) }
+
       // Solver params
       opt[Double]("lambda") action { (x,c) => c.copy(lambda=x) }
       opt[Double]("mixtureWeight") action { (x,c) => c.copy(mixtureWeight=x) }
@@ -254,7 +315,7 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
       opt[String]("lcsGmmVarFile") action { (x,c) => c.copy(lcsGmmVarFile=Some(x)) }
       opt[String]("lcsGmmWtsFile") action { (x,c) => c.copy(lcsGmmWtsFile=Some(x)) }
 
-    }.parse(args, LazyMnistDaisyLcsFVConfig()).get
+    }.parse(args, LazyImageNetDaisyLcsFVConfig()).get
   }
 
   /**

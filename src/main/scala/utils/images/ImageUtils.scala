@@ -2,9 +2,15 @@ package utils
 
 import java.awt.image.BufferedImage
 import java.io.InputStream
+import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
+
 import javax.imageio.ImageIO
 
+
 import pipelines.Logging
+
+import com.sksamuel.scrimage
 
 object ImageUtils extends Logging {
 
@@ -50,8 +56,23 @@ object ImageUtils extends Logging {
    * @param in Input image.
    * @param scalePercent perecnt to scale image by
    */
-  def scaleImage(in: Image, scalePercent: Double): Image = {
-    in
+  def scaleImage(in: Image, scale: Double): Image = {
+    val os = new ByteArrayOutputStream();
+    val os2 = new ByteArrayOutputStream();
+
+    val writer = scrimage.nio.JpegWriter()
+
+    val buffImage = ImageConversions.imageToBufferedImage(in)
+    ImageIO.write(buffImage, "jpg", os);
+    val is = new ByteArrayInputStream(os.toByteArray());
+    writer.write(scrimage.Image.fromStream(is).scale(scale), os2)
+
+    val is2 = new ByteArrayInputStream(os2.toByteArray());
+    val scaledImg = loadImage(is2).get
+    println("XDIM " + scaledImg.metadata.xDim)
+    println("YDIM " + scaledImg.metadata.yDim)
+    scaledImg
+
   }
 
 
