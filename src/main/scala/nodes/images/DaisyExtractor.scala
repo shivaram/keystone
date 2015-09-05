@@ -133,9 +133,6 @@ class DaisyExtractor(
       }
       angleCount += 1
     }
-    println("XDIM " + in.metadata.xDim)
-    println("pixelBorder " + pixelBorder)
-    println("stride " + stride)
 
     // Pack grams into image.
     val keyPointXs =
@@ -151,9 +148,6 @@ class DaisyExtractor(
     val resultWidth = keyPointYs.size
 
     val out = new DenseMatrix[Float](resultHeight * resultWidth, daisyFeatureSize)
-    println("HEIGHT " + resultHeight)
-    println("WIDTH " + resultWidth)
-    println(daisyFeatureSize)
     // Compute and normalize histograms for each key point.
     var x, y, off = 0
     l = 0
