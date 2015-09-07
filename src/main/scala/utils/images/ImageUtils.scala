@@ -60,19 +60,16 @@ object ImageUtils extends Logging {
     val os = new ByteArrayOutputStream();
     val os2 = new ByteArrayOutputStream();
 
-    val writer = scrimage.nio.JpegWriter()
+    val writer = scrimage.nio.PngWriter.NoCompression
 
     val buffImage = ImageConversions.imageToBufferedImage(in)
-    ImageIO.write(buffImage, "jpg", os);
+    ImageIO.write(buffImage, "png", os);
     val is = new ByteArrayInputStream(os.toByteArray());
     writer.write(scrimage.Image.fromStream(is).scale(scale), os2)
 
     val is2 = new ByteArrayInputStream(os2.toByteArray());
     val scaledImg = loadImage(is2).get
-    println("XDIM " + scaledImg.metadata.xDim)
-    println("YDIM " + scaledImg.metadata.yDim)
     scaledImg
-
   }
 
 
