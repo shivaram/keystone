@@ -280,8 +280,8 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
     lambda: Double = 6e-5,
     mixtureWeight: Double = 0.25,
     descDim: Int = 64,
+    numScales: Int = 5,
     vocabSize: Int = 16,
-    daisyScaleStep: Int = 1,
     lcsStride: Int = 4,
     lcsBorder: Int = 16,
     lcsPatch: Int = 6,
@@ -311,12 +311,12 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
 
       // PCA, GMM params
       opt[Int]("descDim") action { (x,c) => c.copy(descDim=x) }
+      opt[Int]("numScales") action { (x,c) => c.copy(numScales=x) }
       opt[Int]("vocabSize") action { (x,c) => c.copy(vocabSize=x) }
       opt[Int]("numPcaSamples") action { (x,c) => c.copy(numPcaSamples=x) }
       opt[Int]("numGmmSamples") action { (x,c) => c.copy(numGmmSamples=x) }
 
       // Daisy, LCS params
-      opt[Int]("daisyScaleStep") action { (x,c) => c.copy(daisyScaleStep=x) }
       opt[Int]("lcsStride") action { (x,c) => c.copy(lcsStride=x) }
       opt[Int]("lcsBorder") action { (x,c) => c.copy(lcsBorder=x) }
       opt[Int]("lcsPatch") action { (x,c) => c.copy(lcsPatch=x) }
