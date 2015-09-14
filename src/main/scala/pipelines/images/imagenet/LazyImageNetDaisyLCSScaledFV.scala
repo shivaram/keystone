@@ -67,7 +67,7 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
       testParsed: RDD[Image],
       numScales: Int = 1)
     : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
-      val (trainFeatures, testFeatures) = new Range(0, numScales, 1).map(x => getDaisyFeatures(conf, trainParsed, testParsed, math.pow(math.sqrt(1/2), x))).unzip
+      val (trainFeatures, testFeatures) = new Range(0, numScales, 1).map(x => getDaisyFeatures(conf, trainParsed, testParsed, math.pow(math.sqrt(1.0/2.0), x))).unzip
       (trainFeatures.flatMap(x => x).iterator, testFeatures.flatMap(x => x).iterator)
   }
 

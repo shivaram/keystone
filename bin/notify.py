@@ -56,7 +56,7 @@ def main():
     if (len(sys.argv) > 2):
         recepient = sys.argv[1]
     else:
-        recepient = "vaishaal@berkeley.edu"
+        recepient = "vaishaal@gmail.com"
 
     send_email(subject, recepient, log,  log_name)
 
