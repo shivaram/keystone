@@ -45,7 +45,14 @@ object ImageConversions {
    */
 
   def imageToBufferedImage(im: Image, scale: Double=1.0): BufferedImage = {
-    val canvas = new BufferedImage(im.metadata.yDim, im.metadata.xDim, BufferedImage.TYPE_INT_RGB)
+    val imageType = im.metadata.numChannels match {
+      case 3 => BufferedImage.TYPE_3BYTE_BGR
+      case 4 => BufferedImage.TYPE_4BYTE_ABGR
+      case 1=> BufferedImage.TYPE_BYTE_GRAY
+      case _ => throw new RuntimeException("Unexpected numChannels")
+    }
+
+    val canvas = new BufferedImage(im.metadata.yDim, im.metadata.xDim, imageType)
 
     val chanArr = im.metadata.numChannels match {
       case 1 => Array(0,0,0)

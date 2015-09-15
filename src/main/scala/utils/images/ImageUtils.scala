@@ -1,9 +1,12 @@
 package utils
 
 import java.awt.image.BufferedImage
+import java.awt.image.AffineTransformOp
+import java.awt.geom.AffineTransform
 import java.io.InputStream
 import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
+import java.io.File
 
 import javax.imageio.ImageIO
 
@@ -57,19 +60,18 @@ object ImageUtils extends Logging {
    * @param scalePercent perecnt to scale image by
    */
   def scaleImage(in: Image, scale: Double): Image = {
-    val os = new ByteArrayOutputStream();
-    val os2 = new ByteArrayOutputStream();
-
-    val writer = scrimage.nio.JpegWriter()
-
     val buffImage = ImageConversions.imageToBufferedImage(in)
-    ImageIO.write(buffImage, "jpg", os);
-    val is = new ByteArrayInputStream(os.toByteArray());
-    writer.write(scrimage.Image.fromStream(is).scale(scale), os2)
+    val x = (in.metadata.xDim * math.sqrt(scale)).toInt
+    val y = (in.metadata.yDim * math.sqrt(scale)).toInt
+    val scaled =  new BufferedImage(y, x, buffImage.getType())
+    val at = AffineTransform.getScaleInstance(math.sqrt(scale), math.sqrt(scale))
 
-    val is2 = new ByteArrayInputStream(os2.toByteArray());
-    val scaledImg = loadImage(is2).get
-    scaledImg
+    val scaleOp = new AffineTransformOp(at, AffineTransformOp.TYPE_BILINEAR);
+    scaleOp.filter(buffImage, scaled)
+
+    val scaledImage = ImageConversions.bufferedImageToWrapper(scaled)
+
+    scaledImage
   }
 
 
