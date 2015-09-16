@@ -60,18 +60,22 @@ object ImageUtils extends Logging {
    * @param scalePercent perecnt to scale image by
    */
   def scaleImage(in: Image, scale: Double): Image = {
-    val buffImage = ImageConversions.imageToBufferedImage(in)
-    val x = (in.metadata.xDim * math.sqrt(scale)).toInt
-    val y = (in.metadata.yDim * math.sqrt(scale)).toInt
-    val scaled =  new BufferedImage(y, x, buffImage.getType())
-    val at = AffineTransform.getScaleInstance(math.sqrt(scale), math.sqrt(scale))
+    if (scale == 1.0) {
+      in
+    } else {
+      val buffImage = ImageConversions.imageToBufferedImage(in)
+      val x = (in.metadata.xDim * math.sqrt(scale)).toInt
+      val y = (in.metadata.yDim * math.sqrt(scale)).toInt
+      val scaled =  new BufferedImage(y, x, buffImage.getType())
+      val at = AffineTransform.getScaleInstance(math.sqrt(scale), math.sqrt(scale))
 
-    val scaleOp = new AffineTransformOp(at, AffineTransformOp.TYPE_BILINEAR);
-    scaleOp.filter(buffImage, scaled)
+      val scaleOp = new AffineTransformOp(at, AffineTransformOp.TYPE_BILINEAR);
+      scaleOp.filter(buffImage, scaled)
 
-    val scaledImage = ImageConversions.bufferedImageToWrapper(scaled)
+      val scaledImage = ImageConversions.bufferedImageToWrapper(scaled)
 
-    scaledImage
+      scaledImage
+    }
   }
 
 
