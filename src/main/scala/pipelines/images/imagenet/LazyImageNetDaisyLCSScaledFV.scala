@@ -243,10 +243,10 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
 
     // Get Daisy + FV features
-    val (trainDaisy, testDaisy) = getDaisyFeaturesScaled(conf, trainParsedImgs, testParsedImgs, 5)
+    val (trainDaisy, testDaisy) = getDaisyFeaturesScaled(conf, trainParsedImgs, testParsedImgs, conf.numScales)
 
     // Get LCS + FV features
-    val (trainLcs, testLcs) = getLcsFeaturesScaled(conf, trainParsedImgs, testParsedImgs, 5)
+    val (trainLcs, testLcs) = getLcsFeaturesScaled(conf, trainParsedImgs, testParsedImgs, conf.numScales)
 
     val trainingFeatures = trainDaisy ++ trainLcs
     val testFeatures = testDaisy ++ testLcs
