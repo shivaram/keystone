@@ -150,10 +150,7 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
     : (RDD[DenseMatrix[Float]], RDD[DenseMatrix[Float]]) = {
 
     val featurizer  = new Scaler(scale) then
-                     PixelScaler then
-                     GrayScaler then
-                     new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch) then
-                     BatchSignedHellingerMapper
+                     new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
     val trainFeatures = featurizer(trainParsed)
     val testFeatures = featurizer(testParsed)
     (trainFeatures, testFeatures)
