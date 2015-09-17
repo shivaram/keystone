@@ -69,9 +69,15 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
       numScales: Int = 1)
     : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
 
-    val (trainDaisyGrouped, testDaisyGrouped) = new Range(0, numScales, 1).toList.map(x => getDaisyFeatures(conf, trainParsed, testParsed, math.pow(math.sqrt(1.0/2.0), x))).unzip
+    val featurizer  = PixelScaler then
+                     GrayScaler then
+                     new DaisyExtractor then
+                     BatchSignedHellingerMapper
+    val scaledFeaturizer = new ScaledImageTransformer(numScales, featurizer)
 
-    val (trainDaisy, testDaisy):(RDD[DenseMatrix[Float]], RDD[DenseMatrix[Float]]) = (trainDaisyGrouped.reduce(_ ++ _), testDaisyGrouped.reduce(_ union _))
+    val trainDaisy = scaledFeaturizer(trainParsed)
+    val testDaisy = scaledFeaturizer(testParsed)
+
     var daisySamples: Option[RDD[DenseVector[Float]]] = None
     val numImgs = trainDaisy.count().toInt
 
@@ -123,39 +129,6 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
     (trainingFeatures, testFeatures)
   }
 
-  def getDaisyFeatures(
-      conf: LazyImageNetDaisyLcsFVConfig,
-      trainParsed: RDD[Image],
-      testParsed: RDD[Image],
-      scale: Double = 1
-      )
-    : (RDD[DenseMatrix[Float]], RDD[DenseMatrix[Float]]) = {
-
-    val featurizer  = new Scaler(scale) then
-                     PixelScaler then
-                     GrayScaler then
-                     new DaisyExtractor then
-                     BatchSignedHellingerMapper
-    val trainFeatures = featurizer(trainParsed)
-    val testFeatures = featurizer(testParsed)
-    (trainFeatures, testFeatures)
-  }
-
-  def getLcsFeatures(
-      conf: LazyImageNetDaisyLcsFVConfig,
-      trainParsed: RDD[Image],
-      testParsed: RDD[Image],
-      scale: Double = 1
-      )
-    : (RDD[DenseMatrix[Float]], RDD[DenseMatrix[Float]]) = {
-
-    val featurizer  = new Scaler(scale) then
-                     new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
-    val trainFeatures = featurizer(trainParsed)
-    val testFeatures = featurizer(testParsed)
-    (trainFeatures, testFeatures)
-  }
-
   def getLcsFeaturesScaled(
       conf: LazyImageNetDaisyLcsFVConfig,
       trainParsed: RDD[Image],
@@ -164,9 +137,12 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
       numScales: Int = 1)
     : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
 
-    val (trainLcsGrouped, testLcsGrouped) = new Range(0, numScales, 1).toList.map(x => getLcsFeatures(conf, trainParsed, testParsed, math.pow(math.sqrt(1.0/2.0), x))).unzip
+    val featurizer  = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
+    val scaledFeaturizer = new ScaledImageTransformer(numScales, featurizer)
 
-    val (trainLcs, testLcs):(RDD[DenseMatrix[Float]], RDD[DenseMatrix[Float]]) = (trainLcsGrouped.reduce(_ ++ _), testLcsGrouped.reduce(_ union _))
+    val trainLcs = scaledFeaturizer(trainParsed)
+    val testLcs = scaledFeaturizer(testParsed)
+
     var lcsSamples: Option[RDD[DenseVector[Float]]] = None
     val numImgs = trainLcs.count().toInt
 
@@ -210,7 +186,7 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
       (pcaTransformer then fisherFeaturizer).apply(trainLcs)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.iterator.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       (pcaTransformer then fisherFeaturizer).apply(testLcs)
     }
