@@ -5,7 +5,7 @@ pushd $FWDIR
 
 IMAGENET_TRAIN_DIR="/imagenet-train-all-scaled-tar"
 IMAGENET_VAL_DIR="/imagenet-validation-all-scaled-tar"
-IMAGENET_LABELS="/root/shivaram-keystone/src/main/resources/imagenet-labels"
+IMAGENET_LABELS="/root/keystone/src/main/resources/imagenet-labels"
 
 DATE=`date +"%Y_%m_%d_%H_%M_%S"`
 mkdir -p /mnt/logs
