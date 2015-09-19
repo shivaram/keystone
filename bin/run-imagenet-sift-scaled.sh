@@ -1,0 +1,23 @@
+#!/bin/bash
+
+FWDIR="$(cd `dirname $0`/..; pwd)"
+pushd $FWDIR
+
+IMAGENET_TRAIN_DIR="/imagenet-train-all-scaled-tar"
+IMAGENET_VAL_DIR="/imagenet-validation-all-scaled-tar"
+IMAGENET_LABELS="/root/keystone/src/main/resources/imagenet-labels"
+
+DATE=`date +"%Y_%m_%d_%H_%M_%S"`
+mkdir -p /mnt/logs
+
+export SPARK_HOME=/root/spark
+
+
+KEYSTONE_MEM=100g ./bin/run-pipeline.sh \
+  pipelines.images.imagenet.LazyImageNetSiftLcsScaledFV \
+  --trainLocation $IMAGENET_TRAIN_DIR \
+  --testLocation $IMAGENET_VAL_DIR \
+  --labelPath $IMAGENET_LABELS \
+  --vocabSize 64 2>&1 | python ./bin/notify.py LazyImageNetDaisyLcsScaledFV
+
+ popd
