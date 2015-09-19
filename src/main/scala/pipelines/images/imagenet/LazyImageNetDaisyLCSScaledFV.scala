@@ -133,7 +133,6 @@ object LazyImageNetDaisyLcsScaledFV extends Serializable with Logging {
       conf: LazyImageNetDaisyLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image],
-    // Get Daisy + FV features
       numScales: Int = 1)
     : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
 
