@@ -133,30 +133,6 @@ DescSet* getMultiScaleDSIFTs_f(
   // collecting the results grouped by pixel value for each scale
   int globalLoc = 0;
   int localoffset = 0;
-  bool groupByPixels = false;
-
-  if (groupByPixels) {
-    // group all desc of same (x,y) for each scale
-    // is done by default if the number of descriptors for each scale is the same
-    for (int i=0; i<numDescPerScale[0]; i++) {
-      for (int scale=0; scale<imgNumScales; scale++) {
-        // if the descriptor norm is below the threshold we zero it out
-        bool copy = true;
-        if ( vl_dsift_get_keypoints( dfilt[scale])[i].norm < contrastthreshold ) {
-          copy = false;
-        }
-        for (int x=0; x<dims; x++) {
-          if (copy) {
-            retValSet->descriptors[globalLoc++] = descSet[scale][localoffset++];
-          }else {
-            retValSet->descriptors[globalLoc++] = 0;
-            localoffset++;
-          }
-        }
-      } // end for scale
-      localoffset += 128;
-    } // end for i
-  } else {
     // concatinate desc. of each scale, one after the other, No groupping based on (x,y) coordinates
     // this is done when the number of desriptors for each scale is not the same.
     for (int scale=0; scale<imgNumScales; scale++) {
