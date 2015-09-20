@@ -18,6 +18,7 @@ class SIFTExtractor(val stepSize: Int = 3, val binSize: Int = 4, val scales: Int
   @transient lazy val extLib = new VLFeat()
 
   val descriptorSize = 128
+  var positionalData:Array[Int] = Array[Int]()
 
   /**
    * Extract SIFTs from an image.
@@ -25,11 +26,23 @@ class SIFTExtractor(val stepSize: Int = 3, val binSize: Int = 4, val scales: Int
    * @return The output for the given input
    */
   def apply(in: Image): DenseMatrix[Float] = {
-    val rawDescDataShort = extLib.getSIFTs(in.metadata.xDim, in.metadata.yDim,
+    val rawDescDataInt = extLib.getSIFTs(in.metadata.xDim, in.metadata.yDim,
       stepSize, binSize, scales, scaleStep, in.getSingleChannelAsFloatArray())
-    val numCols = rawDescDataShort.length/descriptorSize
-    val rawDescData = rawDescDataShort.map(s => s.toFloat)
+    val (siftDescriptors, siftPositional) = convertRawSift(rawDescDataInt)
+    positionalData = siftPositional
+    val numCols = siftDescriptors.length/descriptorSize
+    val rawDescData = siftDescriptors.map(s => s.toFloat)
     new DenseMatrix(descriptorSize, numCols, rawDescData)
+  }
+
+  /**
+   * Convert raw sift + positional data to (Descriptors, PositionalData)
+   */
+
+  def convertRawSift(rawSift: Array[Int]): (Array[Int], Array[Int]) = {
+    val rawSifts = rawSift.zipWithIndex.filter(x => ((x._2 - 1) % 128 != 0) && ((x._2 - 2) % 128 != 0) && ((x._2 - 3 % 128 != 0))).map(_._1)
+    val positions  = rawSift.zipWithIndex.filter(x => !(((x._2 - 1) % 128 != 0) && ((x._2 - 2) % 128 != 0 ) && ((x._2 - 3 % 128 != 0 )))).map(_._1) 
+    (rawSifts, positions)
   }
 }
 

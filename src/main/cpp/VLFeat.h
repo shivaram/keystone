@@ -12,7 +12,7 @@ extern "C" {
  * Method:    getSIFTs
  * Signature: (IIIIII[F)[S
  */
-JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs
+JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs
   (JNIEnv *, jobject, jint, jint, jint, jint, jint, jint, jfloatArray);
 
 #ifdef __cplusplus

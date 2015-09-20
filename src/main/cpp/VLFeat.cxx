@@ -26,6 +26,7 @@ const int dims = 128;
 
 struct DescSet {
   float* descriptors;
+  const VlDsiftKeypoint* keypoints;
   int numDesc;
 };
 
@@ -58,6 +59,7 @@ DescSet* getMultiScaleDSIFTs_f(
   DescSet *retValSet = (DescSet*) malloc(sizeof(DescSet));
   const float **descSet = (const float **) malloc( sizeof(float*)*imgNumScales );
   retValSet->descriptors = NULL;
+  retValSet->keypoints = NULL;
   retValSet->numDesc = 0;
   float contrastthreshold = 0.005;
 
@@ -125,6 +127,8 @@ DescSet* getMultiScaleDSIFTs_f(
   }
   // create the Memory for the results
   retValSet->descriptors = (float*) malloc(retValSet->numDesc*dims*sizeof(float));
+  retValSet->keypoints = (VlDsiftKeypoint*) malloc(retValSet->numDesc*sizeof(VlDsiftKeypoint));
+
   int currRes = 0;
   if (retValSet->descriptors == NULL) {
     printf("\nError in allocating memory for return values retValSet->descriptors\n");
@@ -144,6 +148,9 @@ DescSet* getMultiScaleDSIFTs_f(
         bool copy = true;
         if( dkeys[i].norm < contrastthreshold ) {
           copy = false;
+          memcpy((void*) (retValSet->keypoints + i), (void*) (dkeys + i), sizeof(VlDsiftKeypoint));
+        } else {
+          memset((void*) (retValSet->keypoints + i), 0, sizeof(VlDsiftKeypoint));
         }
         for (int x=0; x<dims; x++) {
           if (copy) {
@@ -156,7 +163,6 @@ DescSet* getMultiScaleDSIFTs_f(
       }// i
       fflush(stdout);
     }// scale
-  }
 
   if ( imgDataScale != 0) {
     free( imgDataScale );
@@ -178,7 +184,7 @@ DescSet* getMultiScaleDSIFTs_f(
   return retValSet;
 }
 
-JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
+JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
     JNIEnv* env,
     jobject obj,
     jint width,
@@ -195,6 +201,8 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   // Allocate memory for the image actual data
   int imMemSize = vl_pgm_get_npixels (&pim) *vl_pgm_get_bpp(&pim) * sizeof (float);
   float* pimData = (float*) malloc( imMemSize ) ;
+  VlDsiftKeypoint sentinel;
+  memset((void*) &sentinel, 0, sizeof(VlDsiftKeypoint));
   // Get the access to the Image data from the JNI interface.
   jsize len = env->GetArrayLength(image);
   jfloat* body = env->GetFloatArrayElements(image, 0);
@@ -221,14 +229,14 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   int numDesc = dSiftSet->numDesc;
   float* floatResult = dSiftSet->descriptors;
   free (dSiftSet);
-  jshort* jshortResult = (jshort*) malloc(numDesc*dims*sizeof(jshort));
+  jint* jintResult = (jint*) malloc(numDesc*dims*sizeof(jint) + 3*numDesc*sizeof(jint));
 
   // transpose the descriptors.
   int binT = 8;
   int binX = 4;
   int binY = 4;
   float *tmpDescr = (float*) malloc(sizeof(float) * dims) ;
-  if (jshortResult != NULL) {  // loop throug and make unsigned dims and put in short to save memory
+  if (jintResult != NULL) {  // loop throug and make unsigned dims and put in int to save memory
     int currLoc = 0;
     for (int i=0; i<numDesc; i++) {
       vl_dsift_transpose_descriptor (tmpDescr, (floatResult + i*128), binT, binX, binY) ;
@@ -236,12 +244,21 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
       for (int x=0; x<dims; x++) {
 
         unsigned int v = (512 * tmpDescr[x]);
-        jshortResult[currLoc++] = ((v < 255) ? v : 255);
+        jintResult[currLoc++] = ((v < 255) ? v : 255);
 
       } // end for x
+      if (memcmp((void*) (dSiftSet->keypoints + i), (void*) (&sentinel), sizeof(VlDsiftKeypoint))) {
+        jintResult[currLoc++] = dSiftSet->keypoints[i].x;
+        jintResult[currLoc++] = dSiftSet->keypoints[i].y;
+        jintResult[currLoc++] = dSiftSet->keypoints[i].s;
+      } else {
+        jintResult[currLoc++] = 0;
+        jintResult[currLoc++] = 0;
+        jintResult[currLoc++] = 0;
+      }
     } // end for i
   } else {
-    printf ("Error in jshortResult array\n");
+    printf ("Error in jintResult array\n");
     fflush(stdout);
     exit(1);
   }
@@ -252,11 +269,11 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
     free (floatResult);
   }
   // allocate a JNI array for the descriptors, populate and return.
-  jshortArray result = env->NewShortArray((numDesc*dims));
-  if (jshortResult != 0) {
-    env->SetShortArrayRegion(result, 0, numDesc*dims, jshortResult);
+  jintArray result = env->NewIntArray((numDesc*dims));
+  if (jintResult != 0) {
+    env->SetIntArrayRegion(result, 0, numDesc*dims, jintResult);
     // free the c++ memory allocated in getMultiScaleDSIFTS_f
-    free( jshortResult );
+    free( jintResult );
   }
   // free the c++ memory for the image data
   if ( pimData != 0 ) {
