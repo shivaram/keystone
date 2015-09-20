@@ -19,7 +19,6 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
   @transient lazy val extLib = new VLFeat()
 
   val descriptorSize = 128
-  var positionalData:Array[Int] = Array[Int]()
 
   /**
    * Extract SIFTs from an image.
@@ -30,10 +29,9 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
     val rawDescDataInt = extLib.getSIFTs(in.metadata.xDim, in.metadata.yDim,
       stepSize, binSize, scales, scaleStep, in.getSingleChannelAsFloatArray())
     val (siftDescriptors, siftPositional) = convertRawSift(rawDescDataInt)
-    positionalData = siftPositional
-    val numCols = siftDescriptors.length/descriptorSize
+    val numCols = siftDescriptors.length/(descriptorSize + 3)
     val rawDescData = siftDescriptors.map(s => s.toFloat)
-    val rawPosData = positionalData.map(s => s.toFloat)
+    val rawPosData = siftPositional.map(s => s.toFloat)
 
     (new DenseMatrix(descriptorSize, numCols, rawDescData),  new DenseMatrix(3, numCols, rawPosData))
   }
