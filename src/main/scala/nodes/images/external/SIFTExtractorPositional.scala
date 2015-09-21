@@ -29,7 +29,7 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
     val rawDescDataInt = extLib.getSIFTs(in.metadata.xDim, in.metadata.yDim,
       stepSize, binSize, scales, scaleStep, in.getSingleChannelAsFloatArray())
     val (siftDescriptors, siftPositional) = convertRawSift(rawDescDataInt)
-    val numCols = siftDescriptors.length/(descriptorSize + 3)
+    val numCols = siftDescriptors.length/descriptorSize
     val rawDescData = siftDescriptors.map(s => s.toFloat)
     val rawPosData = siftPositional.map(s => s.toFloat)
 
@@ -41,8 +41,8 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
    */
 
   def convertRawSift(rawSift: Array[Int]): (Array[Int], Array[Int]) = {
-    val rawSifts = rawSift.zipWithIndex.filter(x => ((x._2 - 1) % 128 != 0) && ((x._2 - 2) % 128 != 0) && ((x._2 - 3 % 128 != 0))).map(_._1)
-    val positions  = rawSift.zipWithIndex.filter(x => !(((x._2 - 1) % 128 != 0) && ((x._2 - 2) % 128 != 0 ) && ((x._2 - 3 % 128 != 0 )))).map(_._1) 
+    val rawSifts = rawSift.zipWithIndex.filter(x => x._2 == 0 || (((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0) && ((x._2 - 2 % 128 != 0)))).map(_._1)
+    val positions  = rawSift.zipWithIndex.filter(x => x._2 != 0 && !(((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0 ) && ((x._2 - 2 % 128 != 0 )))).map(_._1)
     (rawSifts, positions)
   }
 }
