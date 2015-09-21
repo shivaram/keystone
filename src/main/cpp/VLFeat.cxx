@@ -229,8 +229,7 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   int numDesc = dSiftSet->numDesc;
   float* floatResult = dSiftSet->descriptors;
   free (dSiftSet);
-  jint* jintResult = (jint*) malloc(numDesc*dims*sizeof(jint) + 3*numDesc*sizeof(jint));
-
+  jint* jintResult = (jint*) malloc(numDesc*(dims+3)*sizeof(jint));
   // transpose the descriptors.
   int binT = 8;
   int binX = 4;
@@ -269,9 +268,9 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
     free (floatResult);
   }
   // allocate a JNI array for the descriptors, populate and return.
-  jintArray result = env->NewIntArray((numDesc*dims));
+  jintArray result = env->NewIntArray((numDesc*(dims+3)));
   if (jintResult != 0) {
-    env->SetIntArrayRegion(result, 0, numDesc*dims, jintResult);
+    env->SetIntArrayRegion(result, 0, numDesc*(dims+3), jintResult);
     // free the c++ memory allocated in getMultiScaleDSIFTS_f
     free( jintResult );
   }

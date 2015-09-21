@@ -41,9 +41,9 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
    */
 
   def convertRawSift(rawSift: Array[Int]): (Array[Int], Array[Int]) = {
-    val rawSifts = rawSift.zipWithIndex.filter(x => x._2 == 0 || (((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0) && ((x._2 - 2 % 128 != 0)))).map(_._1)
-    val positions  = rawSift.zipWithIndex.filter(x => x._2 != 0 && !(((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0 ) && ((x._2 - 2 % 128 != 0 )))).map(_._1)
-    (rawSifts, positions)
+    val descriptors = rawSift.zipWithIndex.filter(x => x._2 == 0 || (((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0) && (((x._2 - 2) % 128 != 0)))).map(_._1)
+    val positions  = rawSift.zipWithIndex.filter(x => x._2 != 0 && !(((x._2) % 128 != 0) && ((x._2 - 1) % 128 != 0 ) && (((x._2 - 2) % 128 != 0 )))).map(_._1)
+    (descriptors, positions)
   }
 }
 
