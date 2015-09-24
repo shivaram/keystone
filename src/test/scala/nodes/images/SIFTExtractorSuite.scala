@@ -1,5 +1,6 @@
 package nodes.images.external
 
+import breeze.linalg._
 import org.scalatest.FunSuite
 import pipelines.{Logging, LocalSparkContext}
 import utils.{ImageUtils, TestUtils}
@@ -16,10 +17,18 @@ class SIFTExtractorSuite extends FunSuite with Logging {
     val se0 = SIFTExtractor(scaleStep = 0)
     val res0 = se0(grayImage)
 
+    val expectedFirstSum = 0.0
+    val expectedTotalSum = 1.02642608E8
+    val firstKeyPointSum = sum(res0(::, 0))
+    val fullFeatureSum = sum(res0)
+
+
     logInfo(s"Scale 1 shape is: ${res1.rows}x${res1.cols}")
     logInfo(s"Scale 0 shape is: ${res0.rows}x${res0.cols}")
 
     assert(res1.cols < res0.cols)
+    assert(firstKeyPointSum == expectedFirstSum)
+    assert(fullFeatureSum == expectedTotalSum)
 
   }
 
