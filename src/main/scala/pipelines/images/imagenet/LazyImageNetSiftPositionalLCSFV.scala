@@ -74,8 +74,9 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val siftFeaturizer = grayscaler then  new SIFTExtractorPositional(scaleStep = conf.siftScaleStep)
     val siftTrainFeatures = siftFeaturizer(trainParsed)
-    val siftTrainDescriptors = siftTrainFeatures.map(_._1)
     val siftTestFeatures = siftFeaturizer(testParsed)
+    val concatenatedTrainRDD = siftTrainFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
+    val concatenatedTestRDD = siftTestFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
@@ -84,7 +85,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       case None => {
         siftSamples = Some(
           new ColumnSampler(conf.numPcaSamples,
-            Some(numImgs)).apply(siftTrainDescriptors).cache().setName("sift-samples"))
+            Some(numImgs)).apply(concatenatedTrainRDD).cache().setName("sift-samples"))
         val pca = new PCAEstimator(conf.descDim).fit(siftSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
@@ -92,11 +93,9 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     }
 
     // Part 2: Compute dimensionality-reduced PCA features.
-    val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
-    val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
+    val pcaTransformedTrainRDD = concatenatedTrainRDD.map(x => (pcaTransformer(BatchSignedHellingerMapper(x))))
+    val pcaTransformedTestRDD = concatenatedTestRDD.map(x => (pcaTransformer(BatchSignedHellingerMapper(x))))
 
-    val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
-    val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load
     // from disk.
@@ -122,12 +121,12 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      fisherFeaturizer(concatenatedTrainRDD)
+      fisherFeaturizer(pcaTransformedTrainRDD)
     }
 
     val testFeatures = splitGMMs.iterator.map { gmmPart => 
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      fisherFeaturizer(concatenatedTestRDD)
+      fisherFeaturizer(pcaTransformedTestRDD)
     }
 
     (trainingFeatures, testFeatures)
