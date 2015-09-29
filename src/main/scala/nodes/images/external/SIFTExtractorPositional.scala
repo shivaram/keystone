@@ -31,18 +31,39 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
     val (siftDescriptors, siftPositional) = convertRawSift(rawDescDataInt)
     val numCols = siftDescriptors.length/descriptorSize
     val rawDescData = siftDescriptors.map(s => s.toFloat)
-    val rawPosData = siftPositional.map(s => s.toFloat)
+    val rawPosData = scalePositions(siftPositional.map(s => s.toFloat), in.metadata.xDim, in.metadata.yDim)
 
     (new DenseMatrix(descriptorSize, numCols, rawDescData),  new DenseMatrix(3, numCols, rawPosData))
   }
 
+
+  /**
+   *  Scale positions to be in [-0.5, 0.5]
+   */
+
+  def scalePositions(pos: Array[Float], width:Int, height:Int):Array[Float] = {
+    pos.zipWithIndex.map { x =>
+      if ((x._2 + 2) % 3 == 0)  {  // x coord
+        (x._1/width - 0.5).toFloat
+      } else if ((x._2 + 2) % 2 == 0)  { // y coord
+        (x._1/height - 0.5).toFloat
+      } else {
+        (x._1).toFloat
+      }
+    }
+    }
   /**
    * Convert raw sift + positional data to (Descriptors, PositionalData)
    */
 
   def convertRawSift(rawSift: Array[Int]): (Array[Int], Array[Int]) = {
-    val rawSifts = rawSift.zipWithIndex.filter(x => ((x._2 + 3) % 131 != 0) && ((x._2 + 2) % 131 != 0) && ((x._2 + 1) % 131 != 0)).map(_._1)
-    val positions  = rawSift.zipWithIndex.filter(x => !(((x._2 + 3) % 131 != 0) && ((x._2 + 2) % 131 != 0 ) && ((x._2 + 1) % 131 != 0 ))).map(_._1)
+
+    val notPositionalInfo:(((Int, Int))=> Boolean) = { x => ((x._2 + 3) % 131 != 0) && ((x._2 + 2) % 131 != 0) && ((x._2 + 1) % 131 != 0) }
+    /* Filter out the last 3 elements of each 131 dimensional descriptor */
+
+    val rawSifts = rawSift.zipWithIndex.filter(notPositionalInfo).map(_._1)
+    /* Grab the complement of the above */
+   val positions  = rawSift.zipWithIndex.filter(x => !(notPositionalInfo(x))).map(_._1)
     (rawSifts, positions)
   }
 }
