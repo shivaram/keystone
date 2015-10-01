@@ -109,9 +109,9 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       case None =>
         val samples = new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(concatenatedTrainRDD)
         val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
+        val pcaSamples = samples.map((x:DenseVector[Float]) => DenseVector.vertcat(vectorPCATransformer(x(0 until -3)), (x(-3 to -1)))).map(convert(_, Double)).collect()
         new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(MatrixUtils.shuffleArray(
-            vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
+          .fit(MatrixUtils.shuffleArray(pcaSamples).take(1e6.toInt))
     }
 
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
