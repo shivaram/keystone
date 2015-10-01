@@ -152,7 +152,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
         lcsSamples = Some(
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(
             pcapipe(trainParsed)).cache().setName("lcs-samples"))
-        val pca = new PCAEstimator(conf.descDim).fit(lcsSamples.get)
+        val pca = new PCAEstimator(conf.descDim + 3).fit(lcsSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
       }
