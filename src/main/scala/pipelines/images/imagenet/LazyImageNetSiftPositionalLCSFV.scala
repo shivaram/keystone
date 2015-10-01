@@ -77,6 +77,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val siftTrainDescriptors = siftTrainFeatures.map(_._1)
     val siftTestFeatures = siftFeaturizer(testParsed)
 
+
     // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
     val pcaTransformer = conf.siftPcaFile match {
@@ -95,6 +96,8 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
     val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
 
+    val concatenatedSiftTrainRDD = siftTrainFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
+
     val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
     val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
@@ -107,9 +110,10 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmVarFile.get)),
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(concatenatedTrainRDD)
+        val samples = new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(concatenatedSiftTrainRDD)
         val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
-        val pcaSamples = samples.map((x:DenseVector[Float]) => DenseVector.vertcat(vectorPCATransformer(x(0 until -3)), (x(-3 to -1)))).map(convert(_, Double)).collect()
+        println(s"PCA ROWS: ${pcaTransformer.pcaMat.rows}, PCA COLS: ${pcaTransformer.pcaMat.cols}, sample dim: ${samples.first.length}")
+        val pcaSamples = samples.map((x:DenseVector[Float]) => DenseVector.vertcat(vectorPCATransformer(x(0 to -4)),(x(-3 to -1)))).map(convert(_, Double)).collect()
         new GaussianMixtureModelEstimator(conf.vocabSize)
           .fit(MatrixUtils.shuffleArray(pcaSamples).take(1e6.toInt))
     }
