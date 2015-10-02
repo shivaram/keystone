@@ -110,12 +110,9 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmVarFile.get)),
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(concatenatedSiftTrainRDD)
-        val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
-        println(s"PCA ROWS: ${pcaTransformer.pcaMat.rows}, PCA COLS: ${pcaTransformer.pcaMat.cols}, sample dim: ${samples.first.length}")
-        val pcaSamples = samples.map((x:DenseVector[Float]) => DenseVector.vertcat(vectorPCATransformer(x(0 to -4)),(x(-3 to -1)))).map(convert(_, Double)).collect()
+        val sampler = new ColumnSampler(conf.numGmmSamples)
         new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(MatrixUtils.shuffleArray(pcaSamples).take(1e6.toInt))
+          .fit(sampler(concatenatedTrainRDD).map(convert(_, Double)))
     }
 
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
