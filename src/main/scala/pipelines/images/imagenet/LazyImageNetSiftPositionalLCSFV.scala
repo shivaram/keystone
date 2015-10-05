@@ -96,7 +96,6 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
     val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
 
-    val concatenatedSiftTrainRDD = siftTrainFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
     val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
@@ -111,8 +110,9 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
         val sampler = new ColumnSampler(conf.numGmmSamples)
+        val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
         new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(sampler(concatenatedTrainRDD).map(convert(_, Double)))
+          .fit(MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt))
     }
 
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
