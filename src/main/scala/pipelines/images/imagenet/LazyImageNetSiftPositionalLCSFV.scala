@@ -178,7 +178,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           .fit(MatrixUtils.shuffleArray(
             vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
     }
-
+    gmm.saveAsFile("experiment")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
     val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
