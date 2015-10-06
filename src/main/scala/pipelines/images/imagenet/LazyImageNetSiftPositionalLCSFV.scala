@@ -110,7 +110,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
         val sampler = new ColumnSampler(conf.numGmmSamples)
-        val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
+        val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedTrainRDD).map(convert(_, Double))
         new GaussianMixtureModelEstimator(conf.vocabSize)
           .fit(MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt))
     }
