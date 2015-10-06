@@ -43,12 +43,12 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
 
   def scalePositions(pos: Array[Float], width:Int, height:Int):Array[Float] = {
     pos.zipWithIndex.map { x =>
-      if ((x._2 + 2) % 3 == 0)  {  // x coord
-        (x._1/width - 0.5).toFloat
-      } else if ((x._2 + 2) % 2 == 0)  { // y coord
-        (x._1/height - 0.5).toFloat
+      if ((x._2 + 3) % 3 == 0)  {  // x coord
+        (255*x._1/width).toFloat
+      } else if ((x._2 + 2) % 3 == 0)  { // y coord
+        (255*x._1/height).toFloat
       } else {
-        (x._1).toFloat
+        (255*x._1/50.0).toFloat
       }
     }
     }
