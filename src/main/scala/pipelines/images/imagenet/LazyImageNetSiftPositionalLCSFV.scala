@@ -111,6 +111,13 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       case None =>
         val sampler = new ColumnSampler(conf.numGmmSamples)
         val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
+
+        /* Write out samples for debugging */
+        val samplesFile = new File("/tmp/experiments.samples.csv");
+        val collectedSamples =  samples.collect().map(_.toDenseMatrix)
+        val sampleMatrix = collectedSamples.reduce(DenseMatrix.horzcat(_,_))
+        breeze.linalg.csvwrite(samplesFile, sampleMatrix)
+
         new GaussianMixtureModelEstimator(conf.vocabSize)
           .fit(MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt))
     }
