@@ -205,7 +205,7 @@ object LazyImageNetSiftLcsScalaFV extends Serializable with Logging {
       ClassLabelIndicatorsFromIntLabels(ImageNetLoader.NUM_CLASSES) then
       new Cacher[DenseVector[Double]](Some("labels"))
     val trainingLabels = labelGrabber(parsedRDD)
-    trainingLabels.count
+    val numTrainImgs = trainingLabels.count
 
     // Load test data and get actual labels
     val testParsedRDD = ImageNetLoader(
@@ -213,8 +213,9 @@ object LazyImageNetSiftLcsScalaFV extends Serializable with Logging {
       conf.testLocation,
       conf.labelPath).cache().setName("testData")
     val testActual = (labelGrabber then TopKClassifier(1)).apply(testParsedRDD)
-    val numTestImgs = testActual.count
+    val trainActual = TopKClassifier(1).apply(trainingLabels)
 
+    val numTestImgs = testActual.count
     val testFilenamesRDD = testParsedRDD.map(_.filename.get)
 
     val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
@@ -244,6 +245,12 @@ object LazyImageNetSiftLcsScalaFV extends Serializable with Logging {
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
         trainingFeatures, trainingLabels, numBlocks)
+
+    val trainPredictedValues = model.apply(trainingFeatures)
+
+    val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
+
+    logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
