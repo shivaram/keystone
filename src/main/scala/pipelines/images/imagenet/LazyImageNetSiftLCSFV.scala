@@ -112,6 +112,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
             vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
     }
 
+    gmm.saveAsFile("control")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
