@@ -44,7 +44,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       GaussianMixtureModel(
         gmm.means(::, start until end),
         gmm.variances(::, start until end),
-        gmm.weights(start until end) 
+        gmm.weights(start until end)
       )
     }
   }
@@ -64,7 +64,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
@@ -119,12 +119,12 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       fisherFeaturizer(concatenatedTrainRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       fisherFeaturizer(concatenatedTestRDD)
     }
@@ -136,7 +136,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     val numImgs = trainParsed.count.toInt
     var lcsSamples: Option[RDD[DenseVector[Float]]] = None
@@ -169,7 +169,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.lcsGmmVarFile.get)),
           csvread(new File(conf.lcsGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = lcsSamples.getOrElse { 
+        val samples = lcsSamples.getOrElse {
           val lcs = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(lcs(trainParsed))
         }
@@ -181,12 +181,12 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     gmm.saveAsFile("experiment")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       fisherFeaturizer(pcaTransformedRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       (featurizer then fisherFeaturizer).apply(testParsed)
     }
@@ -219,7 +219,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val testFilenamesRDD = testParsedRDD.map(_.filename.get)
 
-    val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
+    val trainParsedImgs = (ImageExtractor).apply(parsedRDD)
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
 
     val trainActual = TopKClassifier(1).apply(trainingLabels)
@@ -247,16 +247,17 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures, trainingLabels, numBlocks)
+        trainingFeatures.iterator, trainingLabels, numBlocks)
+
+    val testPredictedValues = model.apply(testFeatures)
+    val predicted = TopKClassifier(5).apply(testPredictedValues)
+    logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
 
     val trainPredictedValues = model.apply(trainingFeatures)
 
     val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
     logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
 
-    val testPredictedValues = model.apply(testFeatures)
-    val predicted = TopKClassifier(5).apply(testPredictedValues)
-    logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
   }
 
   case class LazyImageNetSiftPositionalLcsFVConfig(

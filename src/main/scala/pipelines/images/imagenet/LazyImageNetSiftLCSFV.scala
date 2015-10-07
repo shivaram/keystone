@@ -64,7 +64,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
@@ -116,12 +116,12 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
 
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       fisherFeaturizer(pcaTransformedRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart => 
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       (grayscaler then featurizer then fisherFeaturizer).apply(testParsed)
     }
@@ -133,7 +133,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     val numImgs = trainParsed.count.toInt
     var lcsSamples: Option[RDD[DenseVector[Float]]] = None
@@ -178,12 +178,12 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
 
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       fisherFeaturizer(pcaTransformedRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart => 
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       (featurizer then fisherFeaturizer).apply(testParsed)
     }
@@ -204,7 +204,8 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       ClassLabelIndicatorsFromIntLabels(ImageNetLoader.NUM_CLASSES) then
       new Cacher[DenseVector[Double]](Some("labels"))
     val trainingLabels = labelGrabber(parsedRDD)
-    trainingLabels.count
+    val numTrainImgs = trainingLabels.count
+    val trainActual = TopKClassifier(1).apply(trainingLabels)
 
     // Load test data and get actual labels
     val testParsedRDD = ImageNetLoader(
@@ -242,11 +243,17 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures, trainingLabels, numBlocks)
+        trainingFeatures.iterator, trainingLabels, numBlocks)
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
     logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
+
+    val trainPredictedValues = model.apply(trainingFeatures)
+
+    val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
+    logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
+
   }
 
   case class LazyImageNetSiftLcsFVConfig(
