@@ -115,6 +115,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           .fit(MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt))
     }
 
+    gmm.saveAsFile("experiment")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
@@ -178,7 +179,6 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           .fit(MatrixUtils.shuffleArray(
             vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
     }
-    gmm.saveAsFile("experiment")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
     val trainingFeatures = splitGMMs.map { gmmPart =>
