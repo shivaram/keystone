@@ -88,9 +88,9 @@ case class GaussianMixtureModel(
   }
   /* Saves GMM mean, var, and weights in /tmp */
   def saveAsFile(name: String) {
-   val meansFile = new File("/tmp" + name +  ".means.csv");
-   val variancesFile = new File("/tmp" + name +  ".variances.csv");
-   val weightsFile = new File("/tmp" + name + ".weights.csv");
+   val meansFile = new File("/tmp/" + name +  ".means.csv");
+   val variancesFile = new File("/tmp/" + name +  ".variances.csv");
+   val weightsFile = new File("/tmp/" + name + ".weights.csv");
    breeze.linalg.csvwrite(meansFile, gmmMeans)
    breeze.linalg.csvwrite(variancesFile, gmmVars)
    breeze.linalg.csvwrite(weightsFile, gmmWeights)
