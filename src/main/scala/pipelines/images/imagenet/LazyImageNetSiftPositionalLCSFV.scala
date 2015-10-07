@@ -77,9 +77,6 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val siftTrainDescriptors = siftTrainFeatures.map(_._1)
     val siftTestFeatures = siftFeaturizer(testParsed)
 
-    val concatenatedTrainRDD = siftTrainFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
-    val concatenatedTestRDD = siftTestFeatures.map(x => DenseMatrix.vertcat(x._1, x._2))
-
 
     // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
@@ -88,17 +85,20 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       case None => {
         siftSamples = Some(
           new ColumnSampler(conf.numPcaSamples,
-            Some(numImgs)).apply(concatenatedTrainRDD).cache().setName("sift-samples"))
+            Some(numImgs)).apply(siftTrainDescriptors).cache().setName("sift-samples"))
         val pca = new PCAEstimator(conf.descDim).fit(siftSamples.get)
+
         new BatchPCATransformer(pca.pcaMat)
       }
     }
 
     // Part 2: Compute dimensionality-reduced PCA features.
-    val pcaTransformedTrainRDD = (BatchSignedHellingerMapper then pcaTransformer).apply(concatenatedTrainRDD)
-    val pcaTransformedTestRDD = (BatchSignedHellingerMapper then pcaTransformer).apply(concatenatedTestRDD)
+    val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
+    val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
 
 
+    val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
+    val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load
     // from disk.
@@ -110,7 +110,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
         val sampler = new ColumnSampler(conf.numGmmSamples)
-        val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedTrainRDD).map(convert(_, Double))
+        val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
         new GaussianMixtureModelEstimator(conf.vocabSize)
           .fit(MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt))
     }
@@ -121,12 +121,12 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      fisherFeaturizer(pcaTransformedTrainRDD)
+      fisherFeaturizer(concatenatedTrainRDD)
     }
 
     val testFeatures = splitGMMs.iterator.map { gmmPart => 
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      fisherFeaturizer(pcaTransformedTestRDD)
+      fisherFeaturizer(concatenatedTestRDD)
     }
 
     (trainingFeatures, testFeatures)
@@ -149,7 +149,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
         lcsSamples = Some(
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(
             pcapipe(trainParsed)).cache().setName("lcs-samples"))
-        val pca = new PCAEstimator(conf.descDim).fit(lcsSamples.get)
+        val pca = new PCAEstimator(conf.descDim + 3).fit(lcsSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
       }
@@ -242,7 +242,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt * 2
     // NOTE(shivaram): one block only contains `centroidBatchSize` worth of SIFT/LCS features
     // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
-    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * (conf.descDim) // 2048  by default
+    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * (conf.descDim + 3) // 2144 by default
 
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
