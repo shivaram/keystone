@@ -103,20 +103,20 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmVarFile.get)),
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = siftSamples.getOrElse {
-          new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(siftHellinger(grayRDD))
-        }
+        val sampler = new ColumnSampler(conf.numGmmSamples)
+        val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedRDD).map(convert(_, Double))
 
         /* Write out samples for debugging */
+
         val samplesFile = new File("/tmp/control.samples.csv");
-        val collectedSamples =  samples.collect().map(convert(_, Double)).map(_.toDenseMatrix)
-        val sampleMatrix = collectedSamples.reduce(DenseMatrix.horzcat(_,_))
+        val collectedSamples = MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt)
+        val collectedSampleMatrices = collectedSamples.take(1000).map(_.asDenseMatrix)
+        val sampleMatrix = collectedSampleMatrices.reduce(DenseMatrix.horzcat(_,_))
         breeze.linalg.csvwrite(samplesFile, sampleMatrix)
 
-        val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
+
         new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(MatrixUtils.shuffleArray(
-            vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
+          .fit(collectedSamples)
     }
 
     gmm.saveAsFile("control")
