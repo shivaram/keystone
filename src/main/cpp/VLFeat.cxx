@@ -235,21 +235,21 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   int binT = 8;
   int binX = 4;
   int binY = 4;
-  bool nonZero = true;
   float *tmpDescr = (float*) malloc(sizeof(float) * dims) ;
   if (jintResult != NULL) {  // loop throug and make unsigned dims and put in int to save memory
     int currLoc = 0;
     for (int i=0; i<numDesc; i++) {
       vl_dsift_transpose_descriptor (tmpDescr, (floatResult + i*128), binT, binX, binY) ;
 
+      bool nonZero = false;
+      int check;
       for (int x=0; x<dims; x++) {
 
         unsigned int v = (512 * tmpDescr[x]);
         jintResult[currLoc++] = ((v < 255) ? v : 255);
-        nonZero = nonZero && (jintResult[currLoc] != 0);
-
+        nonZero = nonZero || (jintResult[currLoc - 1] != 0);
       } // end for x
-      if (nonZero && memcmp((void*) (dSiftSet->keypoints + i), (void*) (&sentinel), sizeof(VlDsiftKeypoint))) {
+      if (memcmp((void*) (dSiftSet->keypoints + i), (void*) (&sentinel), sizeof(VlDsiftKeypoint))) {
         jintResult[currLoc++] = (int) keypoints[i].x;
         jintResult[currLoc++] = (int) keypoints[i].y;
         jintResult[currLoc++] = (int) -(log(keypoints[i].s) - log(sqrt(pim.width*pim.height)));
