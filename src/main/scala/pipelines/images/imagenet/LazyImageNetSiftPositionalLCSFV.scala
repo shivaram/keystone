@@ -44,7 +44,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       GaussianMixtureModel(
         gmm.means(::, start until end),
         gmm.variances(::, start until end),
-        gmm.weights(start until end) 
+        gmm.weights(start until end)
       )
     }
   }
@@ -64,7 +64,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
@@ -76,6 +76,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val siftTrainFeatures = siftFeaturizer(trainParsed)
     val siftTrainDescriptors = siftTrainFeatures.map(_._1)
     val siftTestFeatures = siftFeaturizer(testParsed)
+
 
     // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
@@ -95,6 +96,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
     val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
 
+
     val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
     val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
@@ -107,25 +109,32 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmVarFile.get)),
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = siftSamples.getOrElse {
-          new ColumnSampler(conf.numGmmSamples, Some(numImgs)).apply(concatenatedTrainRDD)
-        }
-        val vectorPCATransformer = new PCATransformer(pcaTransformer.pcaMat)
+        val sampler = new ColumnSampler(conf.numGmmSamples)
+        val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
+
+        /* Write out samples for debugging */
+        val samplesFile = new File("/tmp/experiments.samples.csv");
+        val collectedSamples = MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt)
+        val collectedSampleMatrices = collectedSamples.take(1000).map(_.asDenseMatrix)
+        val sampleMatrix = collectedSampleMatrices.reduce(DenseMatrix.horzcat(_,_))
+        breeze.linalg.csvwrite(samplesFile, sampleMatrix)
+
+
         new GaussianMixtureModelEstimator(conf.vocabSize)
-          .fit(MatrixUtils.shuffleArray(
-            vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
+          .fit(collectedSamples)
     }
 
+    gmm.saveAsFile("experiment")
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       fisherFeaturizer(concatenatedTrainRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
       fisherFeaturizer(concatenatedTestRDD)
     }
@@ -137,7 +146,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Iterator[RDD[DenseVector[Double]]], Iterator[RDD[DenseVector[Double]]]) = {
+    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
 
     val numImgs = trainParsed.count.toInt
     var lcsSamples: Option[RDD[DenseVector[Float]]] = None
@@ -150,7 +159,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
         lcsSamples = Some(
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(
             pcapipe(trainParsed)).cache().setName("lcs-samples"))
-        val pca = new PCAEstimator(conf.descDim).fit(lcsSamples.get)
+        val pca = new PCAEstimator(conf.descDim + 3).fit(lcsSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
       }
@@ -170,7 +179,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           csvread(new File(conf.lcsGmmVarFile.get)),
           csvread(new File(conf.lcsGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = lcsSamples.getOrElse { 
+        val samples = lcsSamples.getOrElse {
           val lcs = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(lcs(trainParsed))
         }
@@ -179,15 +188,14 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           .fit(MatrixUtils.shuffleArray(
             vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
     }
-
     val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
 
-    val trainingFeatures = splitGMMs.iterator.map { gmmPart =>
+    val trainingFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       fisherFeaturizer(pcaTransformedRDD)
     }
 
-    val testFeatures = splitGMMs.iterator.map { gmmPart => 
+    val testFeatures = splitGMMs.map { gmmPart =>
       val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
       (featurizer then fisherFeaturizer).apply(testParsed)
     }
@@ -208,7 +216,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       ClassLabelIndicatorsFromIntLabels(ImageNetLoader.NUM_CLASSES) then
       new Cacher[DenseVector[Double]](Some("labels"))
     val trainingLabels = labelGrabber(parsedRDD)
-    trainingLabels.count
+    val numTrainImgs = trainingLabels.count
 
     // Load test data and get actual labels
     val testParsedRDD = ImageNetLoader(
@@ -220,8 +228,10 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val testFilenamesRDD = testParsedRDD.map(_.filename.get)
 
-    val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
+    val trainParsedImgs = (ImageExtractor).apply(parsedRDD)
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
+
+    val trainActual = TopKClassifier(1).apply(trainingLabels)
 
     // Get SIFT + FV features
     val (trainSift, testSift) = getSiftFeatures(conf, trainParsedImgs, testParsedImgs)
@@ -241,16 +251,22 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt * 2
     // NOTE(shivaram): one block only contains `centroidBatchSize` worth of SIFT/LCS features
     // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
-    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * conf.descDim // 2048 by default
+    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * (conf.descDim + 3) // 2144 by default
 
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures, trainingLabels, numBlocks)
+        trainingFeatures.iterator, trainingLabels, numBlocks)
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
     logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
+
+    val trainPredictedValues = model.apply(trainingFeatures)
+
+    val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
+    logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
+
   }
 
   case class LazyImageNetSiftPositionalLcsFVConfig(
