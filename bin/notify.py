@@ -24,14 +24,18 @@ def send_email(subject, recepient, log, log_name):
     msg['Subject'] = subject
     msg['From'] = FROM
     msg['To'] = recepient
-    with gzip.open('/tmp/{0}.gz'.format(log_name), 'wb') as f:
-        f.write(log)
-    with open('/tmp/{0}.gz'.format(log_name), 'rb') as f:
-        attachment = MIMEApplication(f.read(), 'x-gzip')
-        attachment['Content-Disposition'] = 'attachment; filename={0}.gz'.format(log_name)
+    f = gzip.open('/tmp/{0}.gz'.format(log_name), 'wb')
+    f.write(log)
+    f.close()
+
+    f = open('/tmp/{0}.gz'.format(log_name), 'rb')
+    attachment = MIMEApplication(f.read(), 'x-gzip')
+    attachment['Content-Disposition'] = 'attachment; filename={0}.gz'.format(log_name)
     msg.attach(attachment)
+    f.close()
 
     server = smtplib.SMTP(SERVER)
+    print(log)
     print(subject)
     print(server.sendmail(FROM, recepient, msg.as_string()))
     server.quit()
@@ -56,7 +60,7 @@ def main():
     if (len(sys.argv) > 2):
         recepient = sys.argv[1]
     else:
-        recepient = "vaishaal@berkeley.edu"
+        recepient = "vaishaal@gmail.com"
 
     send_email(subject, recepient, log,  log_name)
 
