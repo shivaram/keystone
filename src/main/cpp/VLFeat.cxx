@@ -250,9 +250,9 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
         nonZero = nonZero || (jintResult[currLoc - 1] != 0);
       } // end for x
       if (memcmp((void*) (dSiftSet->keypoints + i), (void*) (&sentinel), sizeof(VlDsiftKeypoint))) {
-        jintResult[currLoc++] = (int) keypoints[i].x;
-        jintResult[currLoc++] = (int) keypoints[i].y;
-        jintResult[currLoc++] = (int) -(log(keypoints[i].s) - log(sqrt(pim.width*pim.height)));
+        jintResult[currLoc++] = (unsigned int) keypoints[i].x;
+        jintResult[currLoc++] = (unsigned int) keypoints[i].y;
+        jintResult[currLoc++] = (unsigned int) -(log(keypoints[i].s) - log(sqrt(pim.width*pim.height)));
       } else {
         jintResult[currLoc++] = 0;
         jintResult[currLoc++] = 0;
