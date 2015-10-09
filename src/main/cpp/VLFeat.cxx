@@ -148,9 +148,9 @@ DescSet* getMultiScaleDSIFTs_f(
         bool copy = true;
         if( dkeys[i].norm < contrastthreshold ) {
           copy = false;
-          memcpy((void*) (retValSet->keypoints + i), (void*) (dkeys + i), sizeof(VlDsiftKeypoint));
-        } else {
           memset((void*) (retValSet->keypoints + i), 0, sizeof(VlDsiftKeypoint));
+        } else {
+          memcpy((void*) (retValSet->keypoints + i), (void*) (dkeys + i), sizeof(VlDsiftKeypoint));
         }
         for (int x=0; x<dims; x++) {
           if (copy) {
@@ -235,6 +235,7 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   int binT = 8;
   int binX = 4;
   int binY = 4;
+  unsigned int sum = 0;
   float *tmpDescr = (float*) malloc(sizeof(float) * dims) ;
   if (jintResult != NULL) {  // loop throug and make unsigned dims and put in int to save memory
     int currLoc = 0;
