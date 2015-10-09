@@ -201,8 +201,6 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   // Allocate memory for the image actual data
   int imMemSize = vl_pgm_get_npixels (&pim) *vl_pgm_get_bpp(&pim) * sizeof (float);
   float* pimData = (float*) malloc( imMemSize ) ;
-  VlDsiftKeypoint sentinel;
-  memset((void*) &sentinel, 0, sizeof(VlDsiftKeypoint));
   // Get the access to the Image data from the JNI interface.
   jsize len = env->GetArrayLength(image);
   jfloat* body = env->GetFloatArrayElements(image, 0);
@@ -245,27 +243,26 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
       bool nonZero = false;
       int check;
       for (int x=0; x<dims; x++) {
-
         unsigned int v = (512 * tmpDescr[x]);
         jintResult[currLoc++] = ((v < 255) ? v : 255);
         nonZero = nonZero || (jintResult[currLoc - 1] != 0);
       } // end for x
-      if (memcmp((void*) (dSiftSet->keypoints + i), (void*) (&sentinel), sizeof(VlDsiftKeypoint))) {
-        jintResult[currLoc++] = (unsigned int) keypoints[i].x;
-        jintResult[currLoc++] = (unsigned int) keypoints[i].y;
+      jintResult[currLoc++] = (unsigned int) keypoints[i].x;
+      jintResult[currLoc++] = (unsigned int) keypoints[i].y;
+      if (keypoints[i].s != 0) {
         jintResult[currLoc++] = (unsigned int) -(log(keypoints[i].s) - log(sqrt(pim.width*pim.height)));
       } else {
         jintResult[currLoc++] = 0;
-        jintResult[currLoc++] = 0;
-        jintResult[currLoc++] = 0;
       }
     } // end for i
+
   } else {
     printf ("Error in jintResult array\n");
     fflush(stdout);
     exit(1);
   }
   free(tmpDescr);
+
   tmpDescr = 0;
   // free the float-result-array we got from getMultiScaleDSIFTs_f
   if(floatResult != NULL) {
