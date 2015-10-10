@@ -253,7 +253,7 @@ JNIEXPORT jintArray JNICALL Java_utils_external_VLFeat_getSIFTs (
       jintResult[currLoc++] = (unsigned int) keypoints[i].x;
       jintResult[currLoc++] = (unsigned int) keypoints[i].y;
       if (keypoints[i].s != 0) {
-        jintResult[currLoc++] = (unsigned int) -(log(keypoints[i].s) - log(sqrt(pim.width*pim.height)));
+        jintResult[currLoc++] = (unsigned int) keypoints[i].s;
       } else {
         jintResult[currLoc++] = 0;
       }
