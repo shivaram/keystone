@@ -152,6 +152,7 @@ DescSet* getMultiScaleDSIFTs_f(
           memset((void*) (retValSet->keypoints + count), 0, sizeof(VlDsiftKeypoint));
         } else {
           memcpy((void*) (retValSet->keypoints + count), (void*) (dkeys + i), sizeof(VlDsiftKeypoint));
+          (*(VlDsiftKeypoint*) (retValSet->keypoints + count)).s = scale;
         }
         count += 1;
         for (int x=0; x<dims; x++) {
