@@ -56,8 +56,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
         MatrixVectorizer then
         NormalizeRows then
         SignedHellingerMapper then
-        NormalizeRows then
-        new Cacher[DenseVector[Double]](name)
+        NormalizeRows
     fisherFeaturizer
   }
 
@@ -222,32 +221,12 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
     val testFeatures = ZipVectors(Seq(testSift, testLcs))
-    // val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
-    // val testFeatures = ZipVectors(Seq(testSift, testLcs))
+    val dir = "/mnt/features"
 
-    // trainingFeatures.count
-    // val numTestImgs = testFeatures.count
-
-    // We have one block each of LCS and SIFT for centroidBatchSize
-    val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt * 2
-    // NOTE(shivaram): one block only contains `centroidBatchSize` worth of SIFT/LCS features
-    // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
-    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * (conf.descDim + 3) // 2144 by default
-
-    // Fit a weighted least squares model to the data.
-    val model = new BlockWeightedLeastSquaresEstimator(
-      numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
-        trainingFeatures, trainingLabels)
-
-    val testPredictedValues = model.apply(testFeatures)
-    val predicted = TopKClassifier(5).apply(testPredictedValues)
-    logInfo("TEST Error is " + Stats.getErrPercent(predicted, testActual, numTestImgs) + "%")
-
-    val trainPredictedValues = model.apply(trainingFeatures)
-
-    val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
-    logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
-
+      makeDoubleArrayCsv(filenamesRDD, trainingFeatures.map(_.toArray)).saveAsTextFile(dir + "/featuresTrain")
+      makeDoubleArrayCsv(testFilenamesRDD, testFeatures.map(_.toArray)).saveAsTextFile(dir + "/featuresTest")
+      makeDoubleArrayCsv(filenamesRDD, trainingLabels.map(_.toArray)).saveAsTextFile(dir + "/trainLabels")
+      makeDoubleArrayCsv(testFilenamesRDD, testActual).saveAsTextFile(dir + "/testActual")
   }
 
   case class LazyImageNetSiftPositionalLcsFVConfig(
