@@ -270,6 +270,9 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   // free the float-result-array we got from getMultiScaleDSIFTs_f
   if(floatResult != NULL) {
     free (floatResult);
+  }
+
+  if (keypoints != NULL) {
     free((void*)keypoints);
   }
   // allocate a JNI array for the descriptors, populate and return.

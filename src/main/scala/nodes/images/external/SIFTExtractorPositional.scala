@@ -56,9 +56,8 @@ class SIFTExtractorPositional (val stepSize: Int = 3, val binSize: Int = 4, val 
    * Convert raw sift + positional data to (Descriptors, PositionalData)
    */
 
-  def convertRawSift(rawSift: Array[Int]): (Array[Int], Array[Int]) = {
-
-    val notPositionalInfo:(((Int, Int))=> Boolean) = { x => ((x._2 + 3) % 131 != 0) && ((x._2 + 2) % 131 != 0) && ((x._2 + 1) % 131 != 0) }
+  def convertRawSift(rawSift: Array[Short]): (Array[Short], Array[Short]) = {
+    val notPositionalInfo:(((Short, Int))=> Boolean) = { x => ((x._2 + 3) % 131 != 0) && ((x._2 + 2) % 131 != 0) && ((x._2 + 1) % 131 != 0) }
     /* Filter out the last 3 elements of each 131 dimensional descriptor */
 
     val rawSifts = rawSift.zipWithIndex.filter(notPositionalInfo).map(_._1)
