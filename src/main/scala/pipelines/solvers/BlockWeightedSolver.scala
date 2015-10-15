@@ -7,7 +7,7 @@ import org.apache.spark.rdd.RDD
 
 import pipelines.Logging
 
-import loaders.CsvFileDataLoader
+import loaders.CsvMultiFileDataLoader
 import nodes.learning._
 import nodes.util.TopKClassifier
 import utils.Stats
@@ -17,20 +17,19 @@ object BlockWeightedSolver extends Serializable with Logging {
 
   def run(sc: SparkContext, conf: BlockWeightedSolverConfig) {
     // Load the data
-    val trainingFeatures = CsvFileDataLoader(
+    val (trainingFeatures, trainingLabels) = CsvMultiFileDataLoader(
       sc,
-      conf.trainFeaturesDir).cache().setName("trainFeatures")
-    val trainingLabels = CsvFileDataLoader(
-      sc,
-      conf.trainLabelsDir).cache().setName("trainLabels")
+      conf.trainFeaturesDir, conf.trainLabelsDir)
 
-    val testFeatures = CsvFileDataLoader(
-      sc,
-      conf.testFeaturesDir).cache().setName("testFeatures")
+    trainingFeatures.cache().setName("trainFeatures")
+    trainingLabels.cache().setName("trainingLabels")
 
-    val testActual = CsvFileDataLoader(
+    val (testFeatures, testLabels) = CsvMultiFileDataLoader(
       sc,
-      conf.testActualDir).map(x => Array(x(0).toInt)).cache().setName("testActual")
+      conf.testFeaturesDir, conf.testActualDir)
+
+    testFeatures.cache().setName("testFeatures")
+    val testActual = testLabels.map(x => Array(x(0).toInt)).cache().setName("testActual")
 
     val numTrainImgs = trainingFeatures.count
     val numTestImgs = testFeatures.count
