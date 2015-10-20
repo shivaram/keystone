@@ -183,6 +183,7 @@ DescSet* getMultiScaleDSIFTs_f(
     dfilt = 0;
   }
   free(descSet);
+  free(numDescPerScale);
 
   return retValSet;
 }
@@ -289,6 +290,86 @@ JNIEXPORT jshortArray JNICALL Java_utils_external_VLFeat_getSIFTs (
   }
 
     env->ReleaseFloatArrayElements(image, body_orig, 0);
-
   return result;
+}
+int getSifts(float* image, int size, int width, int height) {
+  // Create and set PGMImage metadata
+  VlPgmImage pim ; // image info
+  pim.width = width; pim.height = height; pim.max_value = 0; pim.is_raw = 1;
+  // Allocate memory for the image actual data
+  int imMemSize = vl_pgm_get_npixels (&pim) *vl_pgm_get_bpp(&pim) * sizeof (float);
+  float* pimData = (float*) malloc( imMemSize ) ;
+  // Get the access to the Image data from the JNI interface.
+  int len = size;
+
+  float* body = image;
+  float* body_orig = body;
+  // extract the Data from the JNIArray and find the pixel-maxvalue
+  if ( pimData != 0 ) {
+    for (int i=0; i<vl_pgm_get_npixels (&pim); ++i) {
+      // find the correct maximum value of the grayscale image.
+      if (*body > pim.max_value) {
+        pim.max_value = *body;
+      }
+      pimData[i] = (*body);
+      body++;
+    }
+    fflush(stdout);
+  } else {
+    printf ("Error assigning memory for image buffer");
+    exit(1);
+  }
+  // calculate and get the denseSIFTdescriptors
+  // NOTE! we need to clean up this array with free the passed container pointer.
+  DescSet* dSiftSet = getMultiScaleDSIFTs_f(&pim, pimData, 3, 4, 4, 1);
+
+  int numDesc = dSiftSet->numDesc;
+  float* floatResult = dSiftSet->descriptors;
+  const VlDsiftKeypoint* keypoints = dSiftSet->keypoints;
+  free (dSiftSet);
+  jshort* jshortResult = (jshort*) malloc(numDesc*(dims+3)*sizeof(jshort));
+  // transpose the descriptors.
+  int binT = 8;
+  int binX = 4;
+  int binY = 4;
+  unsigned int sum = 0;
+  float *tmpDescr = (float*) malloc(sizeof(float) * dims) ;
+  if (jshortResult != NULL) {  // loop throug and make unsigned dims and put in int to save memory
+    int currLoc = 0;
+    for (int i=0; i<numDesc; i++) {
+      vl_dsift_transpose_descriptor (tmpDescr, (floatResult + i*128), binT, binX, binY) ;
+
+      bool nonZero = false;
+      int check;
+      for (int x=0; x<dims; x++) {
+        unsigned short v = (512 * tmpDescr[x]);
+        jshortResult[currLoc++] = ((v < 255) ? v : 255);
+        nonZero = nonZero || (jshortResult[currLoc - 1] != 0);
+      } // end for x
+      jshortResult[currLoc++] = (unsigned short) keypoints[i].x;
+      jshortResult[currLoc++] = (unsigned short) keypoints[i].y;
+      if (keypoints[i].s != 0) {
+        jshortResult[currLoc++] = (unsigned short) keypoints[i].s;
+      } else {
+        jshortResult[currLoc++] = 0;
+      }
+    } // end for i
+
+  } else {
+    printf ("Error in jshortResult array\n");
+    fflush(stdout);
+    exit(1);
+  }
+  free(tmpDescr);
+
+  tmpDescr = 0;
+  // free the float-result-array we got from getMultiScaleDSIFTs_f
+  if(floatResult != NULL) {
+    free (floatResult);
+  }
+
+  if (keypoints != NULL) {
+    free((void*)keypoints);
+  }
+  free(pimData);
 }
