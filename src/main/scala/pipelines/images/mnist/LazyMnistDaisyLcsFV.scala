@@ -15,14 +15,15 @@ import evaluation.MulticlassClassifierEvaluator
 import loaders.MnistLoader
 import pipelines.Logging
 
-import nodes.images.external.{FisherVector, SIFTExtractor}
+import nodes.images.external.{FisherVector, FisherVectorStub, SIFTExtractor, SIFTExtractorStub}
 import nodes.images._
 import nodes.learning._
-import nodes.stats.{ColumnSampler, NormalizeRows, SignedHellingerMapper, BatchSignedHellingerMapper}
+import nodes.stats.{ColumnSampler, NormalizeRows, SignedHellingerMapper, BatchSignedHellingerMapper, MatrixSampler}
 import nodes.util.{FloatToDouble, MatrixVectorizer, Cacher}
 import nodes.util.{ClassLabelIndicatorsFromIntLabels, ZipVectors, TopKClassifier}
 
 import utils.{Image, MatrixUtils, Stats}
+import scala.io.Source
 
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
@@ -30,7 +31,7 @@ import org.apache.log4j.Level
 
 object LazyMnistDaisyLcsFV extends Serializable with Logging {
   val appName = "LazyMnistDaisyLcsFV"
-
+  val experiments = Array("Control", "No Fisher Vector", "No Sift", "No Fisher + Sift")
   def makeDoubleArrayCsv[T: ClassTag](filenames: RDD[String], data: RDD[Array[T]]): RDD[String] = {
     filenames.zip(data).map { case (x,y) => x + ","+ y.mkString(",") }
   }
@@ -75,39 +76,52 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     val grayRDD = grayscaler(trainParsed)
 
     val numImgs = trainParsed.count.toInt
-
-    val siftHellinger = (new SIFTExtractor(1) then
-      BatchSignedHellingerMapper)
-
-    // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
-    // disk.
-    val samplerPCA = new ColumnSampler(conf.numPcaSamples)
-    val siftSamples = samplerPCA(siftHellinger(grayRDD)).setName("sift-samples")
-    val samps = siftSamples.collect.map(_.toArray)
-    println(samps.length)
-
-    val dataMat: DenseMatrix[Float] = DenseMatrix(samps:_*)
-
-       // Part 2: Compute dimensionality-reduced PCA features.
+    val siftHellinger =
+    if (conf.experiment < 2) {
+         (new SIFTExtractor(1) then
+        BatchSignedHellingerMapper then new MatrixSampler(conf.descDim))
+    } else {
+        (new SIFTExtractorStub(128, conf.descDim) then
+        BatchSignedHellingerMapper)
+    }
     val featurizer = siftHellinger
     val pcaTransformedRDD = featurizer(grayRDD)
-
     val sampler = new ColumnSampler(conf.numGmmSamples)
     val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedRDD).map(convert(_, Double))
-    /* Write out samples for debugging */
-    val collectedSamples = MatrixUtils.shuffleArray(samples.collect()).take(100)
     val gmm = new GaussianMixtureModelEstimator(conf.vocabSize).fit(samples)
-    val fisherFeaturizer = constructFisherFeaturizer(gmm, Some("sift-fisher"))
+    val FisherVectorizer =
+    if (conf.experiment % 2 == 0) {
+        new FisherVector(gmm)
+    } else {
+        new FisherVectorStub(conf.descDim, conf.vocabSize)
+    }
+    val fisherFeaturizer =
+            FisherVectorizer then
+            FloatToDouble then
+            MatrixVectorizer then
+            NormalizeRows then
+            SignedHellingerMapper then
+            NormalizeRows
 
+    constructFisherFeaturizer(gmm, Some("sift-fisher"))
     (fisherFeaturizer(pcaTransformedRDD), (grayscaler then featurizer then fisherFeaturizer).apply(testParsed))
   }
 
+  def getMemKb():Int = {
+    // Read status file for current process
+    val statFileLines = Source.fromFile("/proc/self/status").getLines()
+    // Read heap size field
+    val vmData = statFileLines.filter(_ contains "VmData").toList.head
+    // Convert to int
+    vmData.split(" ").filter(_.forall(_.isDigit)).head.toInt
+  }
 
   def run(sc: SparkContext, conf: LazyMnistDaisyLcsFVConfig) {
-    var i = 0;
-    while (true) {
-      i += 1;
-      println("ITERATION NUMBER: " + i)
+    val memoryUsage = List[Int]()
+    for (i <- (0 until conf.iterations)) {
+      val memUsed = getMemKb();
+      println(s"ITERATION NUMBER: ${i}, AvailMem ${memUsed *1000} mb")
+      memoryUsage :+ memUsed
     // Property of MNIST
     val numClasses = 10
 
@@ -127,11 +141,10 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     val trainParsedImgs = (ImageExtractor).apply(parsedRDD)
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
 
-    // Get Daisy + FV features
+    // Get Sift + FV features
     val (trainDaisy, testDaisy) = getDaisyFeatures(conf, trainParsedImgs, testParsedImgs)
     val trainingFeatures = trainDaisy.collect()
     val testFeatures = testDaisy.collect()
-    System.gc()
 
     /*
     val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt
@@ -167,15 +180,8 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
     lcsStride: Int = 4,
     lcsBorder: Int = 16,
     lcsPatch: Int = 6,
-    centroidBatchSize: Int = 16, 
-    daisyPcaFile: Option[String] = None,
-    daisyGmmMeanFile: Option[String]= None,
-    daisyGmmVarFile: Option[String] = None,
-    daisyGmmWtsFile: Option[String] = None,
-    lcsPcaFile: Option[String] = None,
-    lcsGmmMeanFile: Option[String]= None,
-    lcsGmmVarFile: Option[String] = None,
-    lcsGmmWtsFile: Option[String] = None,
+    experiment: Int = 0,
+    iterations: Int = 2,
     numPcaSamples: Int = 100,
     numGmmSamples: Int = 1000);
 
@@ -201,18 +207,9 @@ object LazyMnistDaisyLcsFV extends Serializable with Logging {
       opt[Int]("lcsBorder") action { (x,c) => c.copy(lcsBorder=x) }
       opt[Int]("lcsPatch") action { (x,c) => c.copy(lcsPatch=x) }
 
-      opt[Int]("centroidBatchSize") action { (x,c) => c.copy(centroidBatchSize=x) }
+      opt[Int]("experiment") action { (x,c) => c.copy(experiment=x) }
+      opt[Int]("iterations") action { (x,c) => c.copy(iterations=x) }
 
-      // Optional file to load stuff from
-      opt[String]("daisyPcaFile") action { (x,c) => c.copy(daisyPcaFile=Some(x)) }
-      opt[String]("daisyGmmMeanFile") action { (x,c) => c.copy(daisyGmmMeanFile=Some(x)) }
-      opt[String]("daisyGmmVarFile") action { (x,c) => c.copy(daisyGmmVarFile=Some(x)) }
-      opt[String]("daisyGmmWtsFile") action { (x,c) => c.copy(daisyGmmWtsFile=Some(x)) }
-
-      opt[String]("lcsPcaFile") action { (x,c) => c.copy(lcsPcaFile=Some(x)) }
-      opt[String]("lcsGmmMeanFile") action { (x,c) => c.copy(lcsGmmMeanFile=Some(x)) }
-      opt[String]("lcsGmmVarFile") action { (x,c) => c.copy(lcsGmmVarFile=Some(x)) }
-      opt[String]("lcsGmmWtsFile") action { (x,c) => c.copy(lcsGmmWtsFile=Some(x)) }
 
     }.parse(args, LazyMnistDaisyLcsFVConfig()).get
   }
