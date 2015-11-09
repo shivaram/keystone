@@ -26,6 +26,23 @@ class ColumnSampler(
 
 }
 
+class MatrixSampler(
+    numSamples: Int)
+  extends Transformer[DenseMatrix[Float], DenseMatrix[Float]] {
+
+  override def apply(in: RDD[DenseMatrix[Float]]): RDD[DenseMatrix[Float]] = {
+    val r = new scala.util.Random
+    in.map(mat => apply(mat))
+  }
+
+  override def apply(in: DenseMatrix[Float]): DenseMatrix[Float] = {
+        val r = new scala.util.Random
+        val rands = 1 to numSamples map { _ => r.nextInt(in.cols) }
+        in(::, rands).toDenseMatrix
+  }
+
+}
+
 /**
  * Takes a sample of an input RDD of size size.
  * @param size Number of elements to return.
