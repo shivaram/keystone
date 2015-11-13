@@ -237,13 +237,8 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
-        trainingFeatures, trainingLabels, Some(numFeaturesPerBlock*numBlocks))
-
-    val modelFile = new File("/tmp/model.csv")
-    breeze.linalg.csvwrite(modelFile, model.xs.reduce(DenseMatrix.horzcat(_,_)))
-
-    val interceptFile = new File("/tmp/intercept.csv")
-    model.bOpt.map((b:DenseVector[Double]) => breeze.linalg.csvwrite(interceptFile, b.toDenseMatrix))
+        trainingFeatures, trainingLabels, Some(numFeaturesPerBlock*numBlocks),
+        Some("/tmp"))
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
