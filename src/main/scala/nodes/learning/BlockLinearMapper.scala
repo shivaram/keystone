@@ -19,7 +19,7 @@ import utils.{MatrixUtils, Stats}
  * @param featureScalersOpt optional seq of transformers to be applied before transformation
  */
 class BlockLinearMapper(
-    val xs: Seq[DenseMatrix[Double]],
+    @transient val xs: Seq[DenseMatrix[Double]],
     val blockSize: Int,
     val bOpt: Option[DenseVector[Double]] = None,
     val featureScalersOpt: Option[Seq[Transformer[DenseVector[Double], DenseVector[Double]]]] = None)
@@ -68,7 +68,7 @@ class BlockLinearMapper(
     // Add the intercept here
     val bBroadcast = matOut.context.broadcast(bOpt)
     val matOutWithIntercept = matOut.map { mat =>
-      bOpt.map { b =>
+      bBroadcast.value.map { b =>
         mat(*, ::) :+= b
         mat
       }.getOrElse(mat)
@@ -133,8 +133,9 @@ class BlockLinearMapper(
 
       // NOTE: We should only add the intercept once. So do it right before
       // we call the evaluator but don't cache this
+      val bBroadcast = sum.context.broadcast(bOpt)
       val sumAndIntercept = sum.map { mat =>
-        bOpt.map { b =>
+        bBroadcast.value.map { b =>
           mat(*, ::) :+= b
           mat
         }.getOrElse(mat)

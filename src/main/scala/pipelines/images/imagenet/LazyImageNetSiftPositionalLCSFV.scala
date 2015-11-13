@@ -51,7 +51,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
   def constructFisherFeaturizer(gmm: GaussianMixtureModel, name: Option[String] = None) = {
     // Part 3: Compute Fisher Vectors and signed-square-root normalization.
-    val fisherFeaturizer =  new FisherVector(gmm) then
+    val fisherFeaturizer =  new BensFisherVector(gmm) then
         FloatToDouble then
         MatrixVectorizer then
         NormalizeRows then
@@ -237,7 +237,13 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
-        trainingFeatures, trainingLabels)
+        trainingFeatures, trainingLabels, Some(numFeaturesPerBlock*numBlocks))
+
+    val modelFile = new File("/tmp/model.csv")
+    breeze.linalg.csvwrite(modelFile, model.xs.reduce(DenseMatrix.horzcat(_,_)))
+
+    val interceptFile = new File("/tmp/intercept.csv")
+    model.bOpt.map((b:DenseVector[Double]) => breeze.linalg.csvwrite(interceptFile, b.toDenseMatrix))
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
