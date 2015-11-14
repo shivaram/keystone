@@ -238,7 +238,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     val model = new BlockWeightedLeastSquaresEstimator(
       numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
         trainingFeatures, trainingLabels, Some(numFeaturesPerBlock*numBlocks),
-        Some("/tmp"))
+        Some("/mnt"))
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)

@@ -66,13 +66,14 @@ class BlockLinearMapper(
     val matOut = res.reduceLeft((sum, next) => sum.zip(next).map(c => c._1 + c._2))
 
     // Add the intercept here
-    val bBroadcast = matOut.context.broadcast(bOpt)
-    val matOutWithIntercept = matOut.map { mat =>
-      bBroadcast.value.map { b =>
-        mat(*, ::) :+= b
+    val matOutWithIntercept =
+    bOpt.map { b =>
+        val bBroadcast = matOut.context.broadcast(b)
+        matOut.map { mat =>
+        mat(*, ::) :+= bBroadcast.value
         mat
-      }.getOrElse(mat)
-    }
+        }
+    }.getOrElse(matOut)
 
     matOutWithIntercept.flatMap(MatrixUtils.matrixToRowArray)
   }
@@ -133,13 +134,15 @@ class BlockLinearMapper(
 
       // NOTE: We should only add the intercept once. So do it right before
       // we call the evaluator but don't cache this
-      val bBroadcast = sum.context.broadcast(bOpt)
-      val sumAndIntercept = sum.map { mat =>
-        bBroadcast.value.map { b =>
-          mat(*, ::) :+= b
+      val sumAndIntercept =
+      bOpt.map { b =>
+        val bBroadcast = sum.context.broadcast(b)
+        sum.map { mat =>
+         mat(*, ::) :+= bBroadcast.value
           mat
-        }.getOrElse(mat)
-      }
+        }
+      }.getOrElse(sum)
+
       evaluator.apply(sumAndIntercept.flatMap(MatrixUtils.matrixToRowArray))
       prev.map(_.unpersist())
       prev = Some(sum)
