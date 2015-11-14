@@ -13,7 +13,7 @@ class VLFeat extends Serializable {
    * @param bin SIFT Descriptor bin size.
    * @param numScales Number of scales to extract at.
    * @param image Input image as float array.
-   * @return SIFTs as Shorts.
+   * @return SIFTs as Ints format is [SiftDesc[128], x, y, s, SiftDesc[128], x, y, s....]
    */
   @native
   def getSIFTs(
@@ -24,5 +24,4 @@ class VLFeat extends Serializable {
       numScales: Int,
       scaleStep: Int,
       image: Array[Float]): Array[Short]
-
 }

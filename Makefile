@@ -81,6 +81,9 @@ $(ENCEVALDIR):
 	mkdir -p $(ENCEVALDIR)
 	wget $(ENCEVALURL) -O $(ENCEVALDIR)/enceval.tgz
 	cd $(ENCEVALDIR) && tar zxvf enceval.tgz
+	patch $(ENCEVALDIR)/lib/gmm-fisher/fisher.cxx fisher.patch
+
+
 
 vlfeat: $(VLFEATDIR)
 	make -C $(VLFEATDIR)/vlfeat-0.9.20 ARCH=$(VLARCH) MEX= bin-all

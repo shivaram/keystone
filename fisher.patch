@@ -1,0 +1,41 @@
+92a93
+>   printf("Sizes x:%d, wghx:%d", x.size(), wghx.size());
+94a96
+>   printf("Samples: %d\n", nsamples);
+104c106,109
+< 
+---
+>   
+>   printf(" check \n");
+>   fflush(stdout); 
+>   
+113a119,122
+> 
+>   printf(" check 2: ngaus %i, ndim %i \n", ngauss, ndim);
+>   fflush(stdout); 
+> 
+122a132,133
+>     printf(" s1 done \n");
+>     fflush(stdout); 
+128a140,141
+>     printf(" s2 done \n");
+>     fflush(stdout); 
+133a147,148
+>     printf(" s3 done \n");
+>     fflush(stdout); 
+188a204,218
+> 
+>   {
+>     delete[] s0;
+>     for( int k=ngauss; k--; )
+>     {
+>       delete[] s1[k];
+>     }
+>     delete[] s1;
+> 
+>     for( int k=ngauss; k--; )
+>     {
+>       delete[] s2[k];
+>     }
+>     delete[] s2;
+>   }

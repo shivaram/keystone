@@ -4,6 +4,7 @@ import nodes.util.VectorSplitter
 
 import scala.collection.mutable.ArrayBuffer
 
+import java.io.File
 import breeze.linalg._
 import breeze.numerics._
 import breeze.math._
@@ -42,7 +43,8 @@ class BlockWeightedLeastSquaresEstimator(
   def fitOnePass(
       trainingFeatures: Iterator[RDD[DenseVector[Double]]],
       trainingLabels: RDD[DenseVector[Double]],
-      numBlocks: Int): BlockLinearMapper = {
+      numBlocks: Int,
+      saveModelPath: Option[String] = None): BlockLinearMapper = {
     assert(numIter == 1, "number of iterations should be 1 for one-pass")
     BlockWeightedLeastSquaresEstimator.trainOnePassWithL2(
       trainingFeatures,
@@ -50,7 +52,9 @@ class BlockWeightedLeastSquaresEstimator(
       trainingLabels,
       blockSize,
       lambda,
-      mixtureWeight)
+      mixtureWeight,
+      saveModelPath
+      )
   }
  
   /**
@@ -65,7 +69,8 @@ class BlockWeightedLeastSquaresEstimator(
    */
   def fit(
       trainingFeatures: Seq[RDD[DenseVector[Double]]],
-      trainingLabels: RDD[DenseVector[Double]]): BlockLinearMapper = {
+      trainingLabels: RDD[DenseVector[Double]],
+      saveModelPath: Option[String]): BlockLinearMapper = {
     BlockWeightedLeastSquaresEstimator.trainWithL2(
       trainingFeatures,
       trainingFeatures.size,
@@ -73,9 +78,17 @@ class BlockWeightedLeastSquaresEstimator(
       blockSize,
       numIter,
       lambda,
-      mixtureWeight)
+      mixtureWeight,
+      saveModelPath
+      )
   }
 
+  def fit(
+      trainingFeatures: Seq[RDD[DenseVector[Double]]],
+      trainingLabels: RDD[DenseVector[Double]]
+   ): BlockLinearMapper = {
+        fit(trainingFeatures, trainingLabels, None)
+  }
   /**
    * Split features into appropriate blocks and fit a weighted least squares model.
    *
@@ -88,16 +101,19 @@ class BlockWeightedLeastSquaresEstimator(
    */
   override def fit(
       trainingFeatures: RDD[DenseVector[Double]],
-      trainingLabels: RDD[DenseVector[Double]]): BlockLinearMapper = {
-    fit(trainingFeatures, trainingLabels, None)
+      trainingLabels: RDD[DenseVector[Double]]
+    ): BlockLinearMapper = {
+    fit(trainingFeatures, trainingLabels, None, None)
   }
 
   def fit(
       trainingFeatures: RDD[DenseVector[Double]],
       trainingLabels: RDD[DenseVector[Double]],
-      numFeaturesOpt: Option[Int]): BlockLinearMapper = {
+      numFeaturesOpt: Option[Int],
+      saveModelPath: Option[String] = None
+    ): BlockLinearMapper = {
     val trainingFeaturesSplit = new VectorSplitter(blockSize, numFeaturesOpt).apply(trainingFeatures)
-    fit(trainingFeaturesSplit, trainingLabels)
+    fit(trainingFeaturesSplit, trainingLabels, saveModelPath)
   }
 
 }
@@ -110,7 +126,9 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
       trainingLabels: RDD[DenseVector[Double]],
       blockSize: Int,
       lambda: Double,
-      mixtureWeight: Double): BlockLinearMapper = {
+      mixtureWeight: Double,
+      saveModelPath: Option[String]
+    ): BlockLinearMapper = {
     val sc = trainingLabels.context
 
     // Check if all examples in a partition are of the same class
@@ -278,6 +296,15 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
     val jointMeansCombined = DenseMatrix.horzcat(blockStats.map(_.get.jointMean):_*)
 
     val finalB = jointLabelMean - sum(jointMeansCombined.t :* finalFullModel, Axis._0).toDenseVector
+
+    saveModelPath.map({ path =>
+      val modelFile = new File(path + "/model.csv")
+      breeze.linalg.csvwrite(modelFile, finalFullModel)
+
+      val interceptFile = new File(path + "/intercept.csv")
+      breeze.linalg.csvwrite(interceptFile, finalB.toDenseMatrix)
+    })
+
     new BlockLinearMapper(models, blockSize, Some(finalB))
   }
 
@@ -302,7 +329,9 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
       blockSize: Int,
       numIter: Int,
       lambda: Double,
-      mixtureWeight: Double): BlockLinearMapper = {
+      mixtureWeight: Double,
+      saveModelPath: Option[String]
+    ): BlockLinearMapper = {
     val sc = trainingLabels.context
 
     val reshuffleData = {
@@ -502,6 +531,14 @@ object BlockWeightedLeastSquaresEstimator extends Logging {
     val jointMeansCombined = DenseMatrix.horzcat(blockStats.map(_.get.jointMean):_*)
 
     val finalB = jointLabelMean - sum(jointMeansCombined.t :* finalFullModel, Axis._0).toDenseVector
+
+    saveModelPath.map({ path =>
+      val modelFile = new File(path + "/model.csv")
+      breeze.linalg.csvwrite(modelFile, finalFullModel)
+
+      val interceptFile = new File(path + "/intercept.csv")
+      breeze.linalg.csvwrite(interceptFile, finalB.toDenseMatrix)
+    })
     new BlockLinearMapper(models, blockSize, Some(finalB))
   }
 

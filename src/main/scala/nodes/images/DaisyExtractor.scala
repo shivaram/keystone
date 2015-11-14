@@ -148,7 +148,6 @@ class DaisyExtractor(
     val resultWidth = keyPointYs.size
 
     val out = new DenseMatrix[Float](resultHeight * resultWidth, daisyFeatureSize)
-
     // Compute and normalize histograms for each key point.
     var x, y, off = 0
     l = 0

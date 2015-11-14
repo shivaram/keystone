@@ -15,7 +15,7 @@ import evaluation.MulticlassClassifierEvaluator
 import loaders.ImageNetLoader
 import pipelines.Logging
 
-import nodes.images.external.{FisherVector, SIFTExtractor}
+import nodes.images.external.{FisherVector, SIFTExtractorPositional}
 import nodes.images._
 import nodes.learning._
 import nodes.stats.{ColumnSampler, NormalizeRows, SignedHellingerMapper, BatchSignedHellingerMapper}
@@ -24,8 +24,8 @@ import nodes.util.{ClassLabelIndicatorsFromIntLabels, ZipVectors, TopKClassifier
 
 import utils.{Image, MatrixUtils, Stats}
 
-object LazyImageNetSiftLcsFV extends Serializable with Logging {
-  val appName = "LazyImageNetSiftLcsFV"
+object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
+  val appName = "LazyImageNetSiftPositionalLcsFV"
 
   def makeDoubleArrayCsv[T: ClassTag](filenames: RDD[String], data: RDD[Array[T]]): RDD[String] = {
     filenames.zip(data).map { case (x,y) => x + ","+ y.mkString(",") }
@@ -44,37 +44,40 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       GaussianMixtureModel(
         gmm.means(::, start until end),
         gmm.variances(::, start until end),
-        gmm.weights(start until end) 
+        gmm.weights(start until end)
       )
     }
   }
 
   def constructFisherFeaturizer(gmm: GaussianMixtureModel, name: Option[String] = None) = {
     // Part 3: Compute Fisher Vectors and signed-square-root normalization.
-    val fisherFeaturizer =  new FisherVector(gmm) then
+    val fisherFeaturizer =  new BensFisherVector(gmm) then
         FloatToDouble then
         MatrixVectorizer then
         NormalizeRows then
         SignedHellingerMapper then
-        NormalizeRows
+        NormalizeRows then
+        new Cacher[DenseVector[Double]](name)
     fisherFeaturizer
   }
 
   def getSiftFeatures(
-      conf: LazyImageNetSiftLcsFVConfig,
+      conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
+    : (RDD[DenseVector[Double]], RDD[DenseVector[Double]]) = {
 
     // Part 1: Scale and convert images to grayscale.
     val grayscaler = PixelScaler then GrayScaler
-    val grayRDD = grayscaler(trainParsed)
 
     val numImgs = trainParsed.count.toInt
     var siftSamples: Option[RDD[DenseVector[Float]]] = None
 
-    val siftHellinger = (new SIFTExtractor(scaleStep = conf.siftScaleStep) then
-      BatchSignedHellingerMapper)
+    val siftFeaturizer = grayscaler then  new SIFTExtractorPositional(scaleStep = conf.siftScaleStep)
+    val siftTrainFeatures = siftFeaturizer(trainParsed)
+    val siftTrainDescriptors = siftTrainFeatures.map(_._1)
+    val siftTestFeatures = siftFeaturizer(testParsed)
+
 
     // Part 1a: If necessary, perform PCA on samples of the SIFT features, or load a PCA matrix from
     // disk.
@@ -83,7 +86,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       case None => {
         siftSamples = Some(
           new ColumnSampler(conf.numPcaSamples,
-            Some(numImgs)).apply(siftHellinger(grayRDD)).cache().setName("sift-samples"))
+            Some(numImgs)).apply(siftTrainDescriptors).cache().setName("sift-samples"))
         val pca = new PCAEstimator(conf.descDim).fit(siftSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
@@ -91,8 +94,12 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
     }
 
     // Part 2: Compute dimensionality-reduced PCA features.
-    val featurizer = siftHellinger then pcaTransformer
-    val pcaTransformedRDD = featurizer(grayRDD)
+    val pcaTransformedTrainRDD = siftTrainFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
+    val pcaTransformedTestRDD = siftTestFeatures.map(x => (pcaTransformer(BatchSignedHellingerMapper(x._1)),x._2))
+
+
+    val concatenatedTrainRDD = pcaTransformedTrainRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
+    val concatenatedTestRDD = pcaTransformedTestRDD.map(x => DenseMatrix.vertcat(x._1, x._2))
 
     // Part 2a: If necessary, compute a GMM based on the dimensionality-reduced features, or load
     // from disk.
@@ -104,11 +111,10 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
           csvread(new File(conf.siftGmmWtsFile.get)).toDenseVector)
       case None =>
         val sampler = new ColumnSampler(conf.numGmmSamples)
-        val samples: RDD[DenseVector[Double]] = sampler(pcaTransformedRDD).map(convert(_, Double))
+        val samples: RDD[DenseVector[Double]] = sampler(concatenatedTrainRDD).map(convert(_, Double))
 
         /* Write out samples for debugging */
-
-        val samplesFile = new File("/tmp/control.samples.csv");
+        val samplesFile = new File("/tmp/experiments.samples.csv");
         val collectedSamples = MatrixUtils.shuffleArray(samples.collect()).take(1e6.toInt)
         val collectedSampleMatrices = collectedSamples.take(1000).map(_.asDenseMatrix)
         val sampleMatrix = collectedSampleMatrices.reduce(DenseMatrix.horzcat(_,_))
@@ -119,29 +125,18 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
           .fit(collectedSamples)
     }
 
-    gmm.saveAsFile("control")
-    val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
-
+    gmm.saveAsFile("experiment")
     // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
 
-    val trainingFeatures = splitGMMs.map { gmmPart =>
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      fisherFeaturizer(pcaTransformedRDD)
-    }
-
-    val testFeatures = splitGMMs.map { gmmPart => 
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("sift-fisher"))
-      (grayscaler then featurizer then fisherFeaturizer).apply(testParsed)
-    }
-
-    (trainingFeatures, testFeatures)
+    val fisherFeaturizer = constructFisherFeaturizer(gmm, Some("sift-fisher"))
+    (fisherFeaturizer(concatenatedTrainRDD), fisherFeaturizer(concatenatedTestRDD))
   }
 
   def getLcsFeatures(
-      conf: LazyImageNetSiftLcsFVConfig,
+      conf: LazyImageNetSiftPositionalLcsFVConfig,
       trainParsed: RDD[Image],
       testParsed: RDD[Image])
-    : (Seq[RDD[DenseVector[Double]]], Seq[RDD[DenseVector[Double]]]) = {
+    : (RDD[DenseVector[Double]], RDD[DenseVector[Double]]) = {
 
     val numImgs = trainParsed.count.toInt
     var lcsSamples: Option[RDD[DenseVector[Float]]] = None
@@ -154,7 +149,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
         lcsSamples = Some(
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(
             pcapipe(trainParsed)).cache().setName("lcs-samples"))
-        val pca = new PCAEstimator(conf.descDim).fit(lcsSamples.get)
+        val pca = new PCAEstimator(conf.descDim + 3).fit(lcsSamples.get)
 
         new BatchPCATransformer(pca.pcaMat)
       }
@@ -174,7 +169,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
           csvread(new File(conf.lcsGmmVarFile.get)),
           csvread(new File(conf.lcsGmmWtsFile.get)).toDenseVector)
       case None =>
-        val samples = lcsSamples.getOrElse { 
+        val samples = lcsSamples.getOrElse {
           val lcs = new LCSExtractor(conf.lcsStride, conf.lcsBorder, conf.lcsPatch)
           new ColumnSampler(conf.numPcaSamples, Some(numImgs)).apply(lcs(trainParsed))
         }
@@ -184,22 +179,12 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
             vectorPCATransformer(samples).map(convert(_, Double)).collect()).take(1e6.toInt))
     }
 
-    val splitGMMs = splitGMMCentroids(gmm, conf.centroidBatchSize)
+    val fisherFeaturizer = constructFisherFeaturizer(gmm, Some("sift-fisher"))
 
-    val trainingFeatures = splitGMMs.map { gmmPart =>
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
-      fisherFeaturizer(pcaTransformedRDD)
-    }
-
-    val testFeatures = splitGMMs.map { gmmPart => 
-      val fisherFeaturizer = constructFisherFeaturizer(gmmPart, Some("lcs-fisher"))
-      (featurizer then fisherFeaturizer).apply(testParsed)
-    }
-
-    (trainingFeatures, testFeatures)
+    (fisherFeaturizer(pcaTransformedRDD), fisherFeaturizer(featurizer(testParsed)))
   }
 
-  def run(sc: SparkContext, conf: LazyImageNetSiftLcsFVConfig) {
+  def run(sc: SparkContext, conf: LazyImageNetSiftPositionalLcsFVConfig) {
     // Load the data and extract training labels.
     val parsedRDD = ImageNetLoader(
       sc,
@@ -213,7 +198,6 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       new Cacher[DenseVector[Double]](Some("labels"))
     val trainingLabels = labelGrabber(parsedRDD)
     val numTrainImgs = trainingLabels.count
-    val trainActual = TopKClassifier(1).apply(trainingLabels)
 
     // Load test data and get actual labels
     val testParsedRDD = ImageNetLoader(
@@ -225,8 +209,10 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
 
     val testFilenamesRDD = testParsedRDD.map(_.filename.get)
 
-    val trainParsedImgs = (ImageExtractor).apply(parsedRDD) 
+    val trainParsedImgs = (ImageExtractor).apply(parsedRDD)
     val testParsedImgs = (ImageExtractor).apply(testParsedRDD)
+
+    val trainActual = TopKClassifier(1).apply(trainingLabels)
 
     // Get SIFT + FV features
     val (trainSift, testSift) = getSiftFeatures(conf, trainParsedImgs, testParsedImgs)
@@ -234,8 +220,8 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
     // Get LCS + FV features
     val (trainLcs, testLcs) = getLcsFeatures(conf, trainParsedImgs, testParsedImgs)
 
-    val trainingFeatures = trainSift ++ trainLcs
-    val testFeatures = testSift ++ testLcs
+    val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
+    val testFeatures = ZipVectors(Seq(testSift, testLcs))
     // val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
     // val testFeatures = ZipVectors(Seq(testSift, testLcs))
 
@@ -246,12 +232,13 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
     val numBlocks = math.ceil(conf.vocabSize.toDouble / conf.centroidBatchSize).toInt * 2
     // NOTE(shivaram): one block only contains `centroidBatchSize` worth of SIFT/LCS features
     // (i.e. one of them not both !). So this will 2048 if centroidBatchSize is 16
-    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * conf.descDim // 2048 by default
+    val numFeaturesPerBlock = 2 * conf.centroidBatchSize * (conf.descDim + 3) // 2144 by default
 
     // Fit a weighted least squares model to the data.
     val model = new BlockWeightedLeastSquaresEstimator(
-      numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fitOnePass(
-        trainingFeatures.iterator, trainingLabels, numBlocks)
+      numFeaturesPerBlock, 1, conf.lambda, conf.mixtureWeight).fit(
+        trainingFeatures, trainingLabels, Some(numFeaturesPerBlock*numBlocks),
+        Some("/mnt"))
 
     val testPredictedValues = model.apply(testFeatures)
     val predicted = TopKClassifier(5).apply(testPredictedValues)
@@ -264,7 +251,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
 
   }
 
-  case class LazyImageNetSiftLcsFVConfig(
+  case class LazyImageNetSiftPositionalLcsFVConfig(
     trainLocation: String = "",
     testLocation: String = "",
     labelPath: String = "",
@@ -288,8 +275,8 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
     numPcaSamples: Int = 1e7.toInt,
     numGmmSamples: Int = 1e7.toInt)
 
-  def parse(args: Array[String]): LazyImageNetSiftLcsFVConfig = {
-    new OptionParser[LazyImageNetSiftLcsFVConfig](appName) {
+  def parse(args: Array[String]): LazyImageNetSiftPositionalLcsFVConfig = {
+    new OptionParser[LazyImageNetSiftPositionalLcsFVConfig](appName) {
       head(appName, "0.1")
       help("help") text("prints this usage text")
       opt[String]("trainLocation") required() action { (x,c) => c.copy(trainLocation=x) }
@@ -325,7 +312,7 @@ object LazyImageNetSiftLcsFV extends Serializable with Logging {
       opt[String]("lcsGmmVarFile") action { (x,c) => c.copy(lcsGmmVarFile=Some(x)) }
       opt[String]("lcsGmmWtsFile") action { (x,c) => c.copy(lcsGmmWtsFile=Some(x)) }
 
-    }.parse(args, LazyImageNetSiftLcsFVConfig()).get
+    }.parse(args, LazyImageNetSiftPositionalLcsFVConfig()).get
   }
 
   /**
