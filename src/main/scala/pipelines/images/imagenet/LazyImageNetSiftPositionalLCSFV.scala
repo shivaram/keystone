@@ -88,6 +88,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
           new ColumnSampler(conf.numPcaSamples,
             Some(numImgs)).apply(siftTrainDescriptors).cache().setName("sift-samples"))
         val pca = new PCAEstimator(conf.descDim).fit(siftSamples.get)
+        siftTrainFeatures.sparkContext.parallelize(List(pca.pcaMat)).saveAsTextFile("s3n://imagenet-positional-features/features256k/pcaMat")
 
         new BatchPCATransformer(pca.pcaMat)
       }
@@ -126,7 +127,8 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     }
 
     gmm.saveAsFile("experiment")
-    // TODO(shivaram): Is it okay to create fisher featurizer part of the pipeline twice ??
+
+    siftTrainFeatures.sparkContext.parallelize(List(gmm.gmmMeans, gmm.gmmVars, gmm.gmmWeights)).saveAsTextFile("s3n://imagenet-positional-features/features256k/gmm")
 
     val fisherFeaturizer = constructFisherFeaturizer(gmm, Some("sift-fisher"))
     (fisherFeaturizer(concatenatedTrainRDD), fisherFeaturizer(concatenatedTestRDD))
@@ -192,6 +194,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
       conf.labelPath).cache().setName("trainData")
 
     val filenamesRDD = parsedRDD.map(_.filename.get)
+    sc.parallelize(List("test")).saveAsTextFile("s3n://imagenet-positional-features/features256k/testBing")
 
     val labelGrabber = LabelExtractor then
       ClassLabelIndicatorsFromIntLabels(ImageNetLoader.NUM_CLASSES) then
@@ -220,8 +223,13 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
     // Get LCS + FV features
     val (trainLcs, testLcs) = getLcsFeatures(conf, trainParsedImgs, testParsedImgs)
 
+
     val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
     val testFeatures = ZipVectors(Seq(testSift, testLcs))
+
+    trainingFeatures.map(convert(_, Float)).saveAsTextFile("s3n://imagenet-positional-features/features256k/trainFeatures")
+    testFeatures.map(convert(_, Float)).saveAsTextFile("s3n://imagenet-positional-features/features256k/testFeatures")
+    /*
     // val trainingFeatures = ZipVectors(Seq(trainSift, trainLcs))
     // val testFeatures = ZipVectors(Seq(testSift, testLcs))
 
@@ -248,6 +256,7 @@ object LazyImageNetSiftPositionalLcsFV extends Serializable with Logging {
 
     val trainPredicted = TopKClassifier(5).apply(trainPredictedValues)
     logInfo("TRAIN Error is " + Stats.getErrPercent(trainPredicted, trainActual, numTrainImgs) + "%")
+    */
 
   }
 

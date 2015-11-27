@@ -24,9 +24,9 @@ case class GaussianMixtureModel(
     weightThreshold: Double = 1e-4)
   extends Transformer[DenseVector[Double],DenseVector[Double]] {
 
-  private val gmmMeans = means.t
-  private val gmmVars = variances.t
-  private val gmmWeights = weights.toDenseMatrix
+  val gmmMeans = means.t
+  val gmmVars = variances.t
+  val gmmWeights = weights.toDenseMatrix
 
   val k = means.cols
   val dim = means.rows

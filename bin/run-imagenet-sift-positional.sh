@@ -12,11 +12,13 @@ mkdir -p /mnt/logs
 
 export SPARK_HOME=/root/spark
 
-KEYSTONE_MEM=100g ./bin/run-pipeline.sh \
+KEYSTONE_MEM=150g ./bin/run-pipeline.sh \
   pipelines.images.imagenet.LazyImageNetSiftPositionalLcsFV \
   --trainLocation $IMAGENET_TRAIN_DIR \
   --testLocation $IMAGENET_VAL_DIR \
   --labelPath $IMAGENET_LABELS \
   --numPcaSamples 10000000 \
-  --numGmmSamples 10000000
+  --numGmmSamples 10000000 \
+  --vocabSize 1024 \
+  --centroidBatchSize 16 2>&1 | tee /mnt/logs/imagenet-sift-positional-$DATE-vocab-1024.log
 popd
