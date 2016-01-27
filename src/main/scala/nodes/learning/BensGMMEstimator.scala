@@ -35,12 +35,14 @@ case class BensGMMEstimator(k: Int, maxIterations: Int = 100, minClusterSize: In
    */
   def fit(samples: Array[DenseVector[Double]]): GaussianMixtureModel = {
     require(samples.length > 0, "Must have training points")
-
+    val begin = System.nanoTime()
     val X = MatrixUtils.rowsToMatrix(samples)
 
     // Use KMeans++ initialization to get the GMM center initializations
     val kMeansModel = KMeansPlusPlusEstimator(k, 1).fit(X)
     val centerAssignment = kMeansModel.apply(X)
+
+    val gmmBegin = System.nanoTime()
     val assignMass = sum(centerAssignment, Axis._0).toDenseVector
 
     // gather data statistics
@@ -65,6 +67,7 @@ case class BensGMMEstimator(k: Int, maxIterations: Int = 100, minClusterSize: In
     var iter = 0
     var costImproving = true
     var largeEnoughClusters = true
+
     while ((iter < maxIterations) && costImproving && largeEnoughClusters) {
       /* E-STEP */
 
@@ -74,6 +77,7 @@ case class BensGMMEstimator(k: Int, maxIterations: Int = 100, minClusterSize: In
       computing Euclidean distances without for loops.
       */
       val sqMahlist = (XSq * gmmVars.map(0.5 / _).t) - (X * (gmmMeans :/ gmmVars).t) + (DenseMatrix.ones[Double](numSamples, 1) * (sum(gmmMeans :* gmmMeans :/ gmmVars, Axis._1).t :* 0.5))
+      logInfo("Done sqMahlist in iter " + iter)
 
       // compute the log likelihood of the approximate posterior
       val llh = DenseMatrix.ones[Double](numSamples, 1) * (-0.5 * numFeatures * math.log(2 * math.Pi) - 0.5 * sum(bLog(gmmVars), Axis._1).t + bLog(gmmWeights)) - sqMahlist
@@ -97,6 +101,8 @@ case class BensGMMEstimator(k: Int, maxIterations: Int = 100, minClusterSize: In
       logInfo(s"iter=$iter, llh=${curCost(iter)}")
       // Check if we're making progress
       if (iter > 0) {
+        // TODO: The C++ code here is       llh_diff = (llh_curr-llh_prev)/(llh_curr-llh_init);     
+        //       if( llh_diff< (double) param.llh_diff_thr )
         costImproving = (curCost(iter) - curCost(iter - 1)) >= stopTolerance * math.abs(curCost(iter - 1))
       }
       logInfo(s"cost improving: $costImproving")
@@ -133,9 +139,12 @@ case class BensGMMEstimator(k: Int, maxIterations: Int = 100, minClusterSize: In
           gmmVars = max(gmmVars, DenseMatrix.ones[Double](k, 1) * gmmVarLB)
         }
       }
+      logInfo("Done M-step in iter " + iter)
 
       iter += 1
     }
+    val gmmEnd = System.nanoTime()
+    logInfo("Scala GMM: Init took " + (gmmBegin - begin)/1e6 + " ms, EM took: " + (gmmEnd - gmmBegin)/1e6 + " ms") 
 
     GaussianMixtureModel(gmmMeans.t, gmmVars.t, gmmWeights.toDenseVector)
   }
